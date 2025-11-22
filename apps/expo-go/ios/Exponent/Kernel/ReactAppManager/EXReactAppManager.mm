@@ -437,6 +437,14 @@ NSString *const RCTInstanceDidLoadBundle = @"RCTInstanceDidLoadBundle";
   }
 }
 
+- (void)toggleBloomElementInspector
+{
+  if ([self enablesDeveloperTools]) {
+    [self.versionManager toggleBloomElementInspectorForHost:self.reactHost];
+  }
+}
+
+
 - (void)toggleDevMenu
 {
   [[EXKernel sharedInstance] switchTasks];
@@ -463,6 +471,8 @@ NSString *const RCTInstanceDidLoadBundle = @"RCTInstanceDidLoadBundle";
               [weakSelf toggleDevMenu];
             } else if ([name isEqualToString:@"toggleElementInspector"]) {
               [weakSelf toggleElementInspector];
+            } else if ([name isEqualToString:@"toggleBloomElementInspector"]) {
+              [weakSelf toggleBloomElementInspector];
             } else if ([name isEqualToString:@"togglePerformanceMonitor"]) {
               [weakSelf togglePerformanceMonitor];
             }

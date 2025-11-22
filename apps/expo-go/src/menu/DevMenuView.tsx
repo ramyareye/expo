@@ -14,6 +14,7 @@ import * as DevMenu from './DevMenuModule';
 import { DevMenuOnboarding } from './DevMenuOnboarding';
 import { DevMenuServerInfo } from './DevMenuServerInfo';
 import { DevMenuTaskInfo } from './DevMenuTaskInfo';
+import BloomLogo from '../assets/bloom-logo.png';
 import { CappedWidthContainerView } from '../components/Views';
 type Props = {
   task: { manifestUrl: string; manifestString: string };
@@ -63,6 +64,7 @@ const MENU_ITEMS_ICON_MAPPINGS: {
   'dev-remote-debug': <ThemedMaterialIcon name="remote-desktop" />,
   'dev-perf-monitor': <ThemedMaterialIcon name="speedometer" />,
   'dev-inspector': <ThemedMaterialIcon name="border-style" />,
+  'bloom-inspector': <Image source={BloomLogo} style={{ width: 20, height: 20 }} />,
   'dev-fab': <ThemedCustomIcon source={base64FabIcon} />,
 };
 

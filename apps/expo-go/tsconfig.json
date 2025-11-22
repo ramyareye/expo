@@ -9,6 +9,6 @@
     "noUnusedParameters": true,
     "noImplicitAny": true
   },
-  "include": ["App.tsx", "src/**/*", "ts-declarations"],
+  "include": ["App.tsx", "src/**/*", "ts-declarations", "images.d.ts"],
   "exclude": ["**/__mocks__/*"]
 }

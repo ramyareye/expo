@@ -160,6 +160,19 @@ RCT_EXTERN void EXRegisterScopedModule(Class, ...);
     };
   }
 
+ if (isDevModeEnabled) {
+    items[@"bloom-inspector"] = @{
+      @"label": @"Toggle Bloom Element Inspector",
+      @"isEnabled": @YES
+    };
+  } else {
+    items[@"bloom-inspector"] = @{
+      @"label": @"Bloom Inspector Element Unavailable",
+      @"isEnabled": @NO
+    };
+  }
+
+
   items[@"dev-remote-debug"] = @{
     @"label": @"Open JS Debugger",
     @"isEnabled": @YES
@@ -210,6 +223,8 @@ RCT_EXTERN void EXRegisterScopedModule(Class, ...);
     devSettings.isHotLoadingEnabled = !devSettings.isHotLoadingEnabled;
   } else if ([key isEqualToString:@"dev-inspector"]) {
     [devSettings toggleElementInspector];
+  } else if ([key isEqualToString:@"bloom-inspector"]) {
+    [devSettings toggleElementInspector];
   } else if ([key isEqualToString:@"dev-perf-monitor"]) {
     id perfMonitor = [self _moduleInstanceForHost:host named:@"PerfMonitor"];
     if (perfMonitor) {
@@ -255,6 +270,17 @@ RCT_EXTERN void EXRegisterScopedModule(Class, ...);
   RCTDevSettings *devSettings = [self devSettings:host];
   [devSettings toggleElementInspector];
 }
+
+- (void)toggleBloomElementInspectorForHost:(id)host
+{
+  // RCTDevSettings *devSettings = [self devSettings:host];
+  // devSettings.isElementInspectorShown = !devSettings.isElementInspectorShown;
+  [self toggleElementInspectorForHost:host];
+
+  // Or if you want DIFFERENT behavior than normal inspector:
+  // devSettings.isBloomInspectorShown = !devSettings.isBloomInspectorShown;
+}
+
 
 - (uint32_t)addWebSocketNotificationHandler:(void (^)(NSDictionary<NSString *, id> *))handler
                                     queue:(dispatch_queue_t)queue

@@ -22,6 +22,7 @@
 - (void)showDevMenuForHost:(id)host;
 - (void)togglePerformanceMonitorForHost:(id)host;
 - (void)toggleElementInspectorForHost:(id)host;
+- (void)toggleBloomElementInspectorForHost:(id)host;
 - (uint32_t)addWebSocketNotificationHandler:(void (^)(NSDictionary<NSString *, id> *))handler
                          queue:(dispatch_queue_t)queue
                      forMethod:(NSString *)method;
