@@ -3,6 +3,7 @@
 #import <Foundation/Foundation.h>
 #import <React/RCTLog.h>
 #import <React/RCTBridge.h>
+@protocol RCTHostRuntimeDelegate;
 
 
 @class EXManifestsManifest;
@@ -42,3 +43,5 @@
 - (Class)getModuleClassFromName:(const char *)name;
 
 @end
+
+FOUNDATION_EXTERN id<RCTHostRuntimeDelegate> EXGetBloomInspectorRuntimeDelegate(void);

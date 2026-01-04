@@ -6,6 +6,7 @@ import React, { Fragment, useContext, useEffect, useRef } from 'react';
 import { Image } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { UpgradeWarning } from 'src/screens/HomeScreen/UpgradeWarning';
+// import { useBloomInspector } from 'src/utils/useBloomInspector';
 
 import DevMenuBottomSheetContext from './DevMenuBottomSheetContext';
 import { DevMenuCloseButton } from './DevMenuCloseButton';
@@ -70,7 +71,7 @@ const MENU_ITEMS_ICON_MAPPINGS: {
 
 export function DevMenuView({ uuid, task }: Props) {
   const context = useContext(DevMenuBottomSheetContext);
-
+  // const { enabled, setEnabled } = useBloomInspector();
   const [enableDevMenuTools, setEnableDevMenuTools] = React.useState(false);
   const [devMenuItems, setDevMenuItems] = React.useState<{ [key: string]: any }>({});
   const [isOnboardingFinished, setIsOnboardingFinished] = React.useState(false);
@@ -202,11 +203,29 @@ export function DevMenuView({ uuid, task }: Props) {
                     onPress={onGoToHome}
                     icon={<HomeFilledIcon size={iconSize.small} color={theme.icon.default} />}
                   />
+                  <Divider />
+                  {/* <DevMenuItem
+                    buttonKey="Bloom_Inspector_JS"
+                    label="Bloom Inspector"
+                    onPress={async () => {
+                      setEnabled(!enabled);
+                    }}
+                    icon={<Image source={BloomLogo} style={{ width: 20, height: 20 }} />}
+                  /> */}
                 </View>
               </View>
               {enableDevMenuTools && devMenuItems && (
                 <View padding="medium" style={{ paddingTop: 0 }}>
                   <View bg="default" rounded="large">
+                    {/* <Fragment key={'Bloom_Inspector_JS'}>
+                      <DevMenuItem
+                        isEnabled={enabled}
+                        label="Bloom Inspector"
+                        buttonKey="Bloom_Inspector_JS"
+                        onPress={() => setEnabled(!enabled)}
+                        icon={<Image source={BloomLogo} style={{ width: 20, height: 20 }} />}
+                      />
+                    </Fragment> */}
                     {sortedDevMenuItems.map((key, i) => {
                       const item = devMenuItems[key];
 

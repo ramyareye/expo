@@ -27,7 +27,12 @@ export function InitialDataProvider({ children }: { children: React.ReactNode })
 
   return (
     <InitialDataContext.Provider
-      value={{ homeScreenData, setHomeScreenData, currentUserData, setCurrentUserData }}>
+      value={{
+        homeScreenData,
+        setHomeScreenData,
+        currentUserData,
+        setCurrentUserData,
+      }}>
       {children}
     </InitialDataContext.Provider>
   );

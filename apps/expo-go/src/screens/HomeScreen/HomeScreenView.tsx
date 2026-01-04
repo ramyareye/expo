@@ -42,6 +42,7 @@ import { HomeStackRoutes } from '../../navigation/Navigation.types';
 import HistoryActions from '../../redux/HistoryActions';
 import { DevSession, HistoryList } from '../../types';
 import addListenerWithNativeCallback from '../../utils/addListenerWithNativeCallback';
+import { BloomInspectorSwitcher } from '../SettingsScreen';
 
 const PROJECT_UPDATE_INTERVAL = 10000;
 
@@ -121,6 +122,7 @@ export class HomeScreenView extends React.Component<Props, State> {
             <UpgradeWarning />
             <UserReviewSection apps={data?.apps} snacks={data?.snacks} />
             <DevelopmentServersHeader onHelpPress={this._handlePressHelpProjects} />
+            <BloomInspectorSwitcher />
             {projects?.length ? (
               <View bg="default" rounded="large" border="default" overflow="hidden">
                 {projects.map((project, i) => (

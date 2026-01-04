@@ -39,6 +39,13 @@
 - (void)hostDidStart:(RCTHost *)host
 {
   [_manager hostDidStart:[self bundleURL]];
+  NSLog(@"Bloom Log: 45 hostDidStart: %@ runtimeDelegate=%@", host, host.runtimeDelegate);
+  if (!host.runtimeDelegate) {
+    host.runtimeDelegate = EXGetBloomInspectorRuntimeDelegate();
+    NSLog(@"Bloom Log: 46 runtime delegate attached in ExpoAppInstance");
+  } else {
+    NSLog(@"Bloom Log: 47 runtime delegate already set: %@", host.runtimeDelegate);
+  }
 }
 
 - (void)loadBundleAtURL:(NSURL *)sourceURL

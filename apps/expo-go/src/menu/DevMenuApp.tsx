@@ -4,6 +4,7 @@ import React from 'react';
 import { AppRegistry, useColorScheme } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { BloomInspectorProvider } from 'src/utils/useBloomInspector';
 
 import DevMenuBottomSheet from './DevMenuBottomSheet';
 import { DevMenuView } from './DevMenuView';
@@ -55,13 +56,15 @@ function DevMenuApp(props: {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <DevMenuBottomSheet uuid={props.uuid}>
-          <DCCThemeProvider themePreference={theme as ThemePreference}>
-            <ThemeProvider value={Themes[theme]}>
-              <DevMenuView {...props} />
-            </ThemeProvider>
-          </DCCThemeProvider>
-        </DevMenuBottomSheet>
+        <BloomInspectorProvider>
+          <DevMenuBottomSheet uuid={props.uuid}>
+            <DCCThemeProvider themePreference={theme as ThemePreference}>
+              <ThemeProvider value={Themes[theme]}>
+                <DevMenuView {...props} />
+              </ThemeProvider>
+            </DCCThemeProvider>
+          </DevMenuBottomSheet>
+        </BloomInspectorProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

@@ -5,6 +5,8 @@
 #import "EXDisabledDevLoadingView.h"
 #import "EXDisabledDevMenu.h"
 #import "EXDisabledRedBox.h"
+#import <UIKit/UIKit.h>
+#import "EXDevMenuManager.h"
 #import "EXVersionManagerObjC.h"
 #import "EXStatusBarManager.h"
 #import "EXUnversioned.h"
@@ -29,7 +31,6 @@
 #import <React/RCTInspectorDevServerHelper.h>
 #import <React/CoreModulesPlugins.h>
 #import <React/RCTReloadCommand.h>
-
 #import <ExpoModulesCore/EXNativeModulesProxy.h>
 #import <ExpoModulesCore/EXModuleRegistryHolderReactModule.h>
 #import <ReactCommon/RCTTurboModuleManager.h>
@@ -52,6 +53,10 @@
 #import "EXScopedModuleRegistryDelegate.h"
 
 #import "Expo_Go-Swift.h"
+#import "EXKernel.h"
+#import "EXReactAppManager.h"
+#import "EXBloomInspectorManager.h"
+
 
 RCT_EXTERN NSDictionary<NSString *, NSDictionary *> *EXGetScopedModuleClasses(void);
 RCT_EXTERN void EXRegisterScopedModule(Class, ...);
@@ -162,7 +167,7 @@ RCT_EXTERN void EXRegisterScopedModule(Class, ...);
 
  if (isDevModeEnabled) {
     items[@"bloom-inspector"] = @{
-      @"label": @"Toggle Bloom Element Inspector",
+      @"label": @"Toggle Bloom Element Inspector (Native)",
       @"isEnabled": @YES
     };
   } else {
@@ -224,7 +229,8 @@ RCT_EXTERN void EXRegisterScopedModule(Class, ...);
   } else if ([key isEqualToString:@"dev-inspector"]) {
     [devSettings toggleElementInspector];
   } else if ([key isEqualToString:@"bloom-inspector"]) {
-    [devSettings toggleElementInspector];
+    [[EXBloomInspectorOverlayManager sharedInstance] toggle];
+    [[EXDevMenuManager sharedInstance] closeWithoutAnimation];
   } else if ([key isEqualToString:@"dev-perf-monitor"]) {
     id perfMonitor = [self _moduleInstanceForHost:host named:@"PerfMonitor"];
     if (perfMonitor) {
@@ -339,6 +345,8 @@ RCT_EXTERN void EXRegisterScopedModule(Class, ...);
     [extraModules addObject:homeModule];
   }
 
+  [extraModules addObject:[self getModuleInstanceFromClass:[EXBloomInspector class]]];
+  [extraModules addObject:[self getModuleInstanceFromClass:[EXBloomInspectorOverlay class]]];
   [extraModules addObject:[self getModuleInstanceFromClass:[self getModuleClassFromName:"DevSettings"]]];
   id exceptionsManager = [self getModuleInstanceFromClass:RCTExceptionsManagerCls()];
   if (exceptionsManager) {
