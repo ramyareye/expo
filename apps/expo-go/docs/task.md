@@ -15,8 +15,10 @@ UX
 - [x] Element Picker Mode (toggle enable/disable).
 - [x] Visual Selection (highlight border on tap).
 - [x] Props Inspector (props list with name/value/type).
-- [x] Code Location (file + line).  
-  - Note: source currently shows bundle URL + line; “Open in editor” works when a real path is available.
+  - Includes search + copy-to-clipboard.
+- [x] Code Location (file + line).
+  - Source prefers `__bloomSource` / `__source` when available (local `*.tsx` paths), otherwise falls back to fiber debug source + symbolication.
+  - “Open in editor” uses the dev server `/open-stack-frame` endpoint.
 
 Stack
 - [x] Expo Go fork (sdk-54 base).
@@ -26,9 +28,9 @@ Stack
 ### Bonus ideas (optional)
 
 - [ ] Live prop editing.
-- [ ] Code preview snippet.
+- [x] Code preview snippet.
 - [ ] Hierarchy visualization (parent-child tree).
-- [ ] Props search/filter.
+- [x] Props search/filter.
 
 ### Deliverables
 
@@ -39,12 +41,14 @@ Stack
 ### Implementation notes (current state)
 
 - JS payload merges by touchID; React stack/source/props render in the overlay panel.
-- Native payload fallback is disabled (code retained for later use).
-- Panel toggles: Source short/raw, Fiber on/off.
-- “Open in editor” button attempts symbolication and uses dev server `/open-stack-frame`.
+- Native overlay + injected JS can also produce React-aware payloads (fallback path retained).
+- Panel tabs: Overview / Source / Props / Raw.
+- Panel toggles: React Stack short/full, Source short/raw (basename vs full), Fiber on/off.
+- Source snippet uses Metro endpoint `/bloom-source-snippet` (served by Metro, typically `:8081`).
 - Bloom debug logs are gated off by default.
 
 ### Next steps
 
-- [ ] Verify “Open in editor” works on a non-bundle source path.
-- [ ] Decide whether to keep native fallback or disable entirely.
+- [ ] Improve snippet UI readability (background + padding + highlight current line).
+- [ ] Decide behavior for library/native components: show `node_modules` file vs “usage site” attribution.
+- [ ] Handle stale selection after code changes / refresh (clear or reselect).

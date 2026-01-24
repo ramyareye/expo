@@ -46,6 +46,8 @@ Optional/bonus
 Better hierarchy formatting
 Prop filters / search (done)
 Source snippet if needed
+Improve snippet UI readability (background + padding + highlight current line).
+Cleanup: disable debug flags by default (e.g. `DEBUG_SOURCE_SNIPPET`) once stable.
 Hermes custom build to enable bundle prelude execution (research later)
 Delivery pipeline (Option B, later)
 

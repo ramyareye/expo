@@ -28,8 +28,17 @@ type PickPayload = {
   payloadSource?: 'js' | 'native';
 };
 
+type SourceSnippet = {
+  file: string;
+  lineNumber: number;
+  startLine: number;
+  endLine: number;
+  lines: string[];
+};
+
 const DEBUG_BLOOM_LOGS = false;
 const DEBUG_OPEN_IN_EDITOR = false;
+const DEBUG_SOURCE_SNIPPET = false;
 const INTERNAL_COMPONENT_NAMES = new Set([
   'Anonymous',
   'Unknown',
@@ -46,12 +55,14 @@ const INTERNAL_COMPONENT_NAMES = new Set([
 export function BloomInspectorOverlayPanel() {
   const [enabled, setEnabled] = useState(false);
   const [payload, setPayload] = useState<PickPayload | null>(null);
-  type TabKey = 'overview' | 'props' | 'raw';
+  type TabKey = 'overview' | 'source' | 'props' | 'raw';
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [showRawSource, setShowRawSource] = useState(false);
   const [showFiberNodes, setShowFiberNodes] = useState(false);
   const [showFullStack, setShowFullStack] = useState(false);
   const [propsQuery, setPropsQuery] = useState('');
+  const [sourceSnippet, setSourceSnippet] = useState<SourceSnippet | null>(null);
+  const [isSnippetLoading, setIsSnippetLoading] = useState(false);
   const [panelHeight, setPanelHeight] = useState<number | null>(null);
   const panelRef = useRef<View | null>(null);
   const payloadByTouchID = useRef<Map<number, { native?: PickPayload; js?: PickPayload }>>(
@@ -260,6 +271,162 @@ export function BloomInspectorOverlayPanel() {
   }, [payload]);
 
   const devServerOrigin = useMemo(() => getDevServerOrigin(sourceFileName), [sourceFileName]);
+
+  const canShowSnippet = useMemo(() => {
+    const lineNumber = payload?.source?.lineNumber;
+    return Boolean(
+      enabled &&
+        devServerOrigin &&
+        sourceFileName &&
+        typeof lineNumber === 'number' &&
+        lineNumber > 0 &&
+        isLocalFilePath(sourceFileName) &&
+        activeTab === 'source'
+    );
+  }, [activeTab, devServerOrigin, enabled, payload?.source?.lineNumber, sourceFileName]);
+
+  useEffect(() => {
+    const fileName = sourceFileName;
+    const lineNumber = payload?.source?.lineNumber;
+    if (!canShowSnippet || !devServerOrigin || !fileName || typeof lineNumber !== 'number') {
+      setSourceSnippet(null);
+      setIsSnippetLoading(false);
+      if (__DEV__ && DEBUG_SOURCE_SNIPPET) {
+        console.info('Bloom Inspector: snippet skip', {
+          enabled,
+          canShowSnippet,
+          devServerOrigin,
+          sourceFileName,
+          lineNumber,
+        });
+      }
+      return;
+    }
+
+    let canceled = false;
+    (async () => {
+      setIsSnippetLoading(true);
+      try {
+        const body = JSON.stringify({ file: fileName, lineNumber, contextLines: 3 });
+        const origins = getSnippetOrigins(devServerOrigin);
+        if (__DEV__ && DEBUG_SOURCE_SNIPPET) {
+          console.info('Bloom Inspector: snippet origins', { origins });
+        }
+
+        for (const origin of origins) {
+          if (canceled) {
+            return;
+          }
+          const url = `${origin}/bloom-source-snippet`;
+          if (__DEV__ && DEBUG_SOURCE_SNIPPET) {
+            console.info('Bloom Inspector: snippet request', { url, body: JSON.parse(body) });
+          }
+
+          const response = await fetchWithSoftTimeout(
+            url,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+              body,
+            },
+            2000,
+            'bloom-source-snippet'
+          );
+          if (__DEV__ && DEBUG_SOURCE_SNIPPET) {
+            console.info('Bloom Inspector: snippet response headers', {
+              url,
+              status: response.status,
+              ok: response.ok,
+              contentType: response.headers?.get?.('content-type') ?? null,
+            });
+          }
+
+          const text = await response.text().catch(() => '');
+          const trimmedText = text.length > 1200 ? `${text.slice(0, 1200)}…` : text;
+
+          if (!response.ok) {
+            if (__DEV__ && DEBUG_SOURCE_SNIPPET) {
+              console.warn('Bloom Inspector: snippet non-200', {
+                url,
+                status: response.status,
+                responseText: trimmedText || null,
+              });
+            }
+            continue;
+          }
+
+          let parsed: unknown = null;
+          try {
+            parsed = text ? JSON.parse(text) : null;
+          } catch (error) {
+            if (__DEV__ && DEBUG_SOURCE_SNIPPET) {
+              console.warn('Bloom Inspector: snippet JSON parse failed', {
+                url,
+                error: String(error),
+                responseText: trimmedText || null,
+              });
+            }
+            continue;
+          }
+
+          const data = parsed as Partial<SourceSnippet> | null;
+          const looksValid =
+            !!data &&
+            typeof data.file === 'string' &&
+            typeof data.startLine === 'number' &&
+            typeof data.endLine === 'number' &&
+            typeof data.lineNumber === 'number' &&
+            Array.isArray(data.lines);
+          if (!looksValid) {
+            if (__DEV__ && DEBUG_SOURCE_SNIPPET) {
+              console.warn('Bloom Inspector: snippet invalid payload', {
+                url,
+                responseText: trimmedText || null,
+                hint:
+                  typeof parsed === 'object' && parsed && 'launchAsset' in (parsed as any)
+                    ? 'Looks like an Expo manifest response (wrong server/port).'
+                    : null,
+              });
+            }
+            continue;
+          }
+
+          if (!canceled) {
+            if (__DEV__ && DEBUG_SOURCE_SNIPPET) {
+              console.info('Bloom Inspector: snippet ok', {
+                url,
+                file: data.file,
+                startLine: data.startLine,
+                endLine: data.endLine,
+                lineNumber: data.lineNumber,
+                linesCount: data.lines?.length,
+              });
+            }
+            setSourceSnippet(data as SourceSnippet);
+            setIsSnippetLoading(false);
+          }
+          return;
+        }
+
+        if (!canceled) {
+          setSourceSnippet(null);
+          setIsSnippetLoading(false);
+        }
+      } catch (error) {
+        if (!canceled) {
+          if (__DEV__ && DEBUG_SOURCE_SNIPPET) {
+            console.warn('Bloom Inspector: snippet request failed', { error: String(error) });
+          }
+          setSourceSnippet(null);
+          setIsSnippetLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [canShowSnippet, devServerOrigin, payload?.source?.lineNumber, sourceFileName]);
 
   const componentStackFrame = useMemo(() => {
     if (!payload?.componentStack) {
@@ -556,6 +723,11 @@ export function BloomInspectorOverlayPanel() {
                   <Text style={styles.tabText}>Overview</Text>
                 </Pressable>
                 <Pressable
+                  onPress={() => setActiveTab('source')}
+                  style={[styles.tabChip, activeTab === 'source' && styles.tabChipActive]}>
+                  <Text style={styles.tabText}>Source</Text>
+                </Pressable>
+                <Pressable
                   onPress={() => setActiveTab('props')}
                   style={[styles.tabChip, activeTab === 'props' && styles.tabChipActive]}>
                   <Text style={styles.tabText}>Props</Text>
@@ -579,54 +751,6 @@ export function BloomInspectorOverlayPanel() {
                   </View>
                   {displayedStackParts.length ? (
                     <Text style={styles.sectionBody}>{displayedStackParts.join(' > ')}</Text>
-                  ) : (
-                    <Text style={styles.sectionBody}>Unavailable</Text>
-                  )}
-
-                  <View style={styles.sectionHeaderRow}>
-                    <Text style={styles.sectionTitleInline}>Source</Text>
-                    {sourceKindLabel ? (
-                      <Text style={styles.badgeText}>{sourceKindLabel}</Text>
-                    ) : null}
-                    <Pressable
-                      onPress={() => setShowRawSource((value) => !value)}
-                      style={[styles.toggleChip, showRawSource && styles.toggleChipActive]}>
-                      <Text style={styles.toggleText}>{showRawSource ? 'Raw' : 'Short'}</Text>
-                    </Pressable>
-                  </View>
-                  {sourceLabel ? (
-                    <>
-                      <Text style={styles.sectionBody}>{sourceLabel}</Text>
-                      <View style={styles.inlineActionsRow}>
-                        <Pressable
-                          onPress={() =>
-                            copyToClipboard(
-                              `${normalizeSourceFileName(payload?.source?.fileName ?? '')}:${
-                                payload?.source?.lineNumber ?? ''
-                              }`,
-                              'source'
-                            )
-                          }
-                          style={styles.inlineActionButton}>
-                          <Text style={styles.inlineActionText}>Copy</Text>
-                        </Pressable>
-                        {canOpenInEditor ? (
-                          <Pressable
-                            onPress={handleOpenInEditor}
-                            style={styles.inlineActionButtonPrimary}>
-                            <Text style={styles.inlineActionTextPrimary}>Open in editor</Text>
-                          </Pressable>
-                        ) : null}
-                      </View>
-                      {isLibrarySource ? (
-                        <Text style={styles.sectionHint}>
-                          This is a library/native component (`node_modules`).
-                        </Text>
-                      ) : null}
-                      {!canOpenInEditor ? (
-                        <Text style={styles.sectionHint}>Open in editor unavailable.</Text>
-                      ) : null}
-                    </>
                   ) : (
                     <Text style={styles.sectionBody}>Unavailable</Text>
                   )}
@@ -657,6 +781,68 @@ export function BloomInspectorOverlayPanel() {
                         1
                       )}`}
                     </Text>
+                  ) : (
+                    <Text style={styles.sectionBody}>Unavailable</Text>
+                  )}
+                </>
+              )}
+
+              {activeTab === 'source' && (
+                <>
+                  <View style={styles.sectionHeaderRow}>
+                    <Text style={styles.sectionTitleInline}>Source</Text>
+                    {sourceKindLabel ? (
+                      <Text style={styles.badgeText}>{sourceKindLabel}</Text>
+                    ) : null}
+                    <Pressable
+                      onPress={() => setShowRawSource((value) => !value)}
+                      style={[styles.toggleChip, showRawSource && styles.toggleChipActive]}>
+                      <Text style={styles.toggleText}>{showRawSource ? 'Raw' : 'Short'}</Text>
+                    </Pressable>
+                  </View>
+                  {sourceLabel ? (
+                    <>
+                      <Text style={styles.sectionBody}>{sourceLabel}</Text>
+                      {sourceSnippet?.lines?.length ? (
+                        <Text style={styles.snippetBody}>{formatSnippet(sourceSnippet)}</Text>
+                      ) : isSnippetLoading ? (
+                        <Text style={styles.sectionHint}>Loading source snippet…</Text>
+                      ) : canShowSnippet ? (
+                        <Text style={styles.sectionHint}>
+                          Source snippet unavailable (restart dev server to pick up
+                          `/bloom-source-snippet`).
+                        </Text>
+                      ) : null}
+                      <View style={styles.inlineActionsRow}>
+                        <Pressable
+                          onPress={() =>
+                            copyToClipboard(
+                              `${normalizeSourceFileName(payload?.source?.fileName ?? '')}:${
+                                payload?.source?.lineNumber ?? ''
+                              }`,
+                              'source'
+                            )
+                          }
+                          style={styles.inlineActionButton}>
+                          <Text style={styles.inlineActionText}>Copy</Text>
+                        </Pressable>
+                        {canOpenInEditor ? (
+                          <Pressable
+                            onPress={handleOpenInEditor}
+                            style={styles.inlineActionButtonPrimary}>
+                            <Text style={styles.inlineActionTextPrimary}>Open in editor</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
+                      {isLibrarySource ? (
+                        <Text style={styles.sectionHint}>
+                          This is a library/native component (`node_modules`).
+                        </Text>
+                      ) : null}
+                      {!canOpenInEditor ? (
+                        <Text style={styles.sectionHint}>Open in editor unavailable.</Text>
+                      ) : null}
+                    </>
                   ) : (
                     <Text style={styles.sectionBody}>Unavailable</Text>
                   )}
@@ -768,6 +954,55 @@ function isHostHierarchyName(name: string): boolean {
     return true;
   }
   return /^(RCT|UI|RN|RNC)/.test(name);
+}
+
+function isLocalFilePath(fileName: string): boolean {
+  if (!fileName) {
+    return false;
+  }
+  if (fileName.startsWith('http://') || fileName.startsWith('https://')) {
+    return false;
+  }
+  if (fileName.startsWith('/')) {
+    return true;
+  }
+  if (/^[a-zA-Z]:[\\/]/.test(fileName)) {
+    return true;
+  }
+  return false;
+}
+
+function formatSnippet(snippet: SourceSnippet): string {
+  const { startLine, lines, lineNumber } = snippet;
+  const maxLineNo = startLine + lines.length - 1;
+  const padWidth = String(maxLineNo).length;
+  return lines
+    .map((line, index) => {
+      const lineNo = startLine + index;
+      const marker = lineNo === lineNumber ? '>' : ' ';
+      return `${marker} ${String(lineNo).padStart(padWidth, ' ')} | ${line}`;
+    })
+    .join('\n');
+}
+
+function getSnippetOrigins(devServerOrigin: string): string[] {
+  const origins: string[] = [];
+  if (devServerOrigin) {
+    origins.push(devServerOrigin);
+  }
+  try {
+    const url = new URL(devServerOrigin);
+    const port = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
+    // If we are hitting a "manifest" server (80/443), Metro is often on 8081.
+    if (port === 80 || port === 443) {
+      const metro = new URL(devServerOrigin);
+      metro.port = '8081';
+      origins.push(metro.origin);
+    }
+  } catch {
+    // ignore
+  }
+  return Array.from(new Set(origins));
 }
 
 function isNoisyStackName(name: string): boolean {
@@ -1248,6 +1483,12 @@ const styles = StyleSheet.create({
   rawBody: {
     fontSize: 11,
     color: '#333',
+  },
+  snippetBody: {
+    marginTop: 6,
+    fontSize: 11,
+    color: '#222',
+    fontFamily: 'Menlo',
   },
   sectionHint: {
     fontSize: 11,
