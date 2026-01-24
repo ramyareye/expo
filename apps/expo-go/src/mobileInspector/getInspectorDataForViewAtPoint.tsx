@@ -35,6 +35,8 @@ const renderers: ReactRenderer[] = reactDevToolsHook
   ? Array.from(reactDevToolsHook.renderers.values())
   : [];
 
+const DEBUG_BLOOM_LOGS = false;
+
 if (reactDevToolsHook?.on && typeof reactDevToolsHook.on === 'function') {
   reactDevToolsHook.on('renderer', ({ renderer }: { renderer: ReactRenderer }) => {
     renderers.push(renderer);
@@ -62,7 +64,6 @@ export function getInspectorDataForViewAtPoint(
   validateRenderers();
 
   let shouldBreak = false;
-  console.log('renderers', renderers);
   for (const renderer of renderers) {
     if (shouldBreak) break;
 
@@ -151,6 +152,7 @@ function getFiberName(fiber: Fiber | null | undefined): string {
   }
   const type = (fiber.elementType ?? fiber.type) as
     | { displayName?: string; name?: string; render?: { displayName?: string; name?: string } }
+    | (((...args: any[]) => any) & { displayName?: string })
     | string
     | undefined;
   if (typeof type === 'string') {
@@ -195,6 +197,65 @@ function getCodeInfoFromFiber(
   };
 }
 
+function getSourceFromProps(
+  props: Record<string, unknown> | null | undefined
+): ReactInspectorMetadata['source'] | null {
+  if (!props) {
+    return null;
+  }
+  const candidate = (props.__bloomSource ?? props.__source) as
+    | { fileName?: unknown; lineNumber?: unknown; columnNumber?: unknown }
+    | undefined;
+  if (!candidate || typeof candidate !== 'object') {
+    return null;
+  }
+  const fileName = candidate.fileName;
+  const lineNumber = candidate.lineNumber;
+  const columnNumber = candidate.columnNumber;
+  if (typeof fileName !== 'string' || typeof lineNumber !== 'number') {
+    return null;
+  }
+  return {
+    fileName,
+    lineNumber,
+    columnNumber: typeof columnNumber === 'number' ? columnNumber : 1,
+  };
+}
+
+function isBundleUrl(fileName: string | undefined): boolean {
+  if (!fileName) {
+    return false;
+  }
+  if (fileName.startsWith('http://') || fileName.startsWith('https://')) {
+    return true;
+  }
+  return fileName.includes('index.bundle');
+}
+
+function isNodeModulesPath(fileName: string | undefined): boolean {
+  if (!fileName) {
+    return false;
+  }
+  return fileName.includes('/node_modules/');
+}
+
+function scoreSource(fileName: string | undefined): number {
+  if (!fileName) {
+    return -1;
+  }
+  let score = 0;
+  if (!isBundleUrl(fileName)) {
+    score += 2;
+  }
+  if (!isNodeModulesPath(fileName)) {
+    score += 3;
+  }
+  if (fileName.includes('/apps/')) {
+    score += 1;
+  }
+  return score;
+}
+
 function findNearestUserFiberWithSource(fiber: Fiber | null | undefined) {
   let current: Fiber | null | undefined = fiber;
   while (current) {
@@ -205,7 +266,11 @@ function findNearestUserFiberWithSource(fiber: Fiber | null | undefined) {
     if (current._debugOwner) {
       const ownerInfo = getCodeInfoFromFiber(current._debugOwner);
       if (ownerInfo && isUserComponent(current._debugOwner)) {
-        return { fiber: current._debugOwner, codeInfo: ownerInfo, name: getFiberName(current._debugOwner) };
+        return {
+          fiber: current._debugOwner,
+          codeInfo: ownerInfo,
+          name: getFiberName(current._debugOwner),
+        };
       }
     }
     current = current.return;
@@ -306,7 +371,10 @@ function getFiberFromViewData(viewData: unknown): Fiber | null {
     return candidate as Fiber;
   }
   const publicInstance = data.closestPublicInstance ?? data.publicInstance ?? null;
-  if (publicInstance && (publicInstance as { _internalInstanceHandle?: Fiber })._internalInstanceHandle) {
+  if (
+    publicInstance &&
+    (publicInstance as { _internalInstanceHandle?: Fiber })._internalInstanceHandle
+  ) {
     return (publicInstance as { _internalInstanceHandle?: Fiber })._internalInstanceHandle ?? null;
   }
   if (candidate && (candidate as { _internalInstanceHandle?: Fiber })._internalInstanceHandle) {
@@ -364,7 +432,13 @@ function isHostComponentName(name: string): boolean {
   if (!name) {
     return true;
   }
-  if (name === 'View' || name === 'Text' || name === 'Image' || name === 'ScrollView' || name === 'Pressable') {
+  if (
+    name === 'View' ||
+    name === 'Text' ||
+    name === 'Image' ||
+    name === 'ScrollView' ||
+    name === 'Pressable'
+  ) {
     return true;
   }
   if (name === 'RCTView' || name === 'RCTText' || name === 'RCTParagraphComponentView') {
@@ -461,12 +535,30 @@ export function getReactMetadataFromViewData(
     const stackNames = buildComponentStackFromFiber(fiber);
     const nearestFiber = findNearestUserFiberWithSource(fiber);
     const hierarchy = buildHierarchyFromFiber(fiber);
+    const candidateSources: ReactInspectorMetadata['source'][] = [];
     const fiberSource = nearestFiber ? nearestFiber.codeInfo : getCodeInfoFromFiber(fiber);
-    if (stackNames.length) {
+    const propsSource =
+      getSourceFromProps(nearestFiber?.fiber?.memoizedProps) ??
+      getSourceFromProps(fiber.memoizedProps);
+    // Prefer the raw stack from the renderer (often includes file/line info needed for "Open in editor").
+    if (rawStack) {
+      metadata.componentStack = rawStack;
+    } else if (stackNames.length) {
       metadata.componentStack = stackNames.join('\n');
     }
     if (fiberSource) {
-      metadata.source = fiberSource;
+      candidateSources.push(fiberSource);
+    }
+    if (propsSource) {
+      candidateSources.push(propsSource);
+    }
+    if (DEBUG_BLOOM_LOGS) {
+      const fiberFile = fiberSource?.fileName ?? 'none';
+      const propsFile = propsSource?.fileName ?? 'none';
+      const nearestName = nearestFiber?.name ?? 'none';
+      console.info(
+        `Bloom Log: 38-6 source scan nearest=${nearestName} fiber=${fiberFile} props=${propsFile}`
+      );
     }
     if (hierarchy.length) {
       metadata.hierarchy = hierarchy;
@@ -474,12 +566,59 @@ export function getReactMetadataFromViewData(
     if (nearestFiber?.fiber?.memoizedProps) {
       metadata.props = nearestFiber.fiber.memoizedProps as Record<string, unknown>;
     }
+
+    let current: Fiber | null | undefined = fiber;
+    let depth = 0;
+    while (current && depth < 30) {
+      const currentSource = getCodeInfoFromFiber(current);
+      if (currentSource) {
+        candidateSources.push(currentSource);
+      }
+      const currentPropsSource = getSourceFromProps(current.memoizedProps);
+      if (currentPropsSource) {
+        candidateSources.push(currentPropsSource);
+      }
+      if (current._debugOwner) {
+        const ownerSource = getCodeInfoFromFiber(current._debugOwner);
+        if (ownerSource) {
+          candidateSources.push(ownerSource);
+        }
+        const ownerPropsSource = getSourceFromProps(current._debugOwner.memoizedProps);
+        if (ownerPropsSource) {
+          candidateSources.push(ownerPropsSource);
+        }
+      }
+      current = current.return;
+      depth += 1;
+    }
+
+    if (candidateSources.length) {
+      let bestSource = candidateSources[0] ?? null;
+      let bestScore = scoreSource(bestSource?.fileName);
+      for (const source of candidateSources) {
+        const score = scoreSource(source?.fileName);
+        if (score > bestScore) {
+          bestScore = score;
+          bestSource = source ?? null;
+        }
+      }
+      if (bestSource) {
+        metadata.source = bestSource;
+      }
+    }
   }
   if (!metadata.source) {
     const stackSource = extractSourceFromComponentStack(rawStack || metadata.componentStack);
     if (stackSource) {
       metadata.source = stackSource;
     }
+  }
+  if (DEBUG_BLOOM_LOGS) {
+    const stackSource = extractSourceFromComponentStack(rawStack || metadata.componentStack);
+    const chosen = metadata.source?.fileName ?? 'none';
+    console.info(
+      `Bloom Log: 38-5 source candidates stack=${stackSource?.fileName ?? 'none'} chosen=${chosen}`
+    );
   }
   return metadata;
 }

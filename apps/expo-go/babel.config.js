@@ -5,7 +5,7 @@ module.exports = function (api) {
     plugins: ['react-native-worklets/plugin'],
     env: {
       development: {
-        plugins: ['@babel/plugin-transform-react-jsx-source'],
+        plugins: ['@babel/plugin-transform-react-jsx-source', './babel/bloom-source-plugin'],
       },
     },
   };

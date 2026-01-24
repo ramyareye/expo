@@ -2,6 +2,8 @@
 
 This doc summarizes what we changed on the native (iOS) side and how React-level inspector data is now flowing into the overlay panel.
 
+For a presentation-friendly, end-to-end walkthrough, see `docs/bloom-inspector-overview.md`.
+
 ## What’s implemented on native iOS
 
 ### 1) Native overlay window (selection + highlight)
@@ -27,6 +29,8 @@ This doc summarizes what we changed on the native (iOS) side and how React-level
 ### 4) Fallback native-only data
 - When React inspector data isn’t available, native view info is sent:
   - class chain, frame, basic props (alpha/hidden/userInteractionEnabled, accessibility, reactTag if present).
+  - Note: the native fallback path is currently guarded by `kBloomInspectorEnableNativeFallback` in
+    `ios/Exponent/Versioned/Core/EXBloomInspectorManager.mm` (default is `NO`).
 
 ## Current JS panel (overlay UI)
 
@@ -59,9 +63,10 @@ React inspector payloads are generated in JS and sent to the overlay via
 - Keep native-only payload as fallback when JS is unavailable.
 
 ### B) Decide on native fallback timing
-- Current native fallback delay is 0.35s with a 1.0s suppression window.
-- If JS payload is reliable, we can reduce or remove the delay to avoid lag.
-  (See `kBloomInspectorFallbackDelaySeconds` in `EXBloomInspectorManager.mm`.)
+- The fallback timing constants live in `ios/Exponent/Versioned/Core/EXBloomInspectorManager.mm`:
+  - `kBloomInspectorFallbackDelaySeconds` (currently `0.05`)
+  - `kBloomInspectorSuppressWindowSeconds` (currently `1.0`)
+- Note: the fallback is disabled by default via `kBloomInspectorEnableNativeFallback = NO`.
 
 ## Progress updates (latest)
 
@@ -76,8 +81,11 @@ React inspector payloads are generated in JS and sent to the overlay via
 
 ### Runtime injection (status)
 - **File:** `ios/Exponent/Versioned/Core/EXBloomInspectorManager.mm`
-- Runtime injection exists but is not relied on for the JS payload; the JS bridge
-  in `useBloomInspector` provides the data.
+- Runtime injection exists and evaluates a JS script via `RCTHostRuntimeDelegate` when the runtime
+  initializes (see `didInitializeRuntime` in `EXBloomInspectorManager.mm`).
+- The JS bridge for tap→payload is implemented in `src/utils/useBloomInspector.tsx`; injection is
+  not required for the event flow itself, but is used to improve observability/availability of the
+  React DevTools hook/renderers (which power `getInspectorDataForViewAtPoint`).
 
 ## Files changed so far (native)
 
@@ -86,7 +94,7 @@ React inspector payloads are generated in JS and sent to the overlay via
 - `ios/Exponent/Versioned/Core/EXBloomInspectorManager.mm`
   - overlay window + hit-testing
   - native modules + event emitters
-  - runtime delegate (injection disabled)
+  - runtime delegate + runtime script evaluation
 - `ios/Exponent/Versioned/Core/EXVersionManagerObjC.mm`
   - dev menu toggle
   - module registration in `extraModules`
@@ -98,6 +106,31 @@ React inspector payloads are generated in JS and sent to the overlay via
 - **Working now:** native selection + highlight + overlay panel UI + dev menu toggle.
 - **Working now:** JS payload with React stack/source/props, merged into the panel.
 - **Fallback:** native-only payload when JS is unavailable.
+- **Logs:** native Bloom logs are disabled by default (`kBloomInspectorDebugLogs = NO`); JS files
+  contain local debug flags (`DEBUG_BLOOM_LOGS`, `DEBUG_OPEN_IN_EDITOR`) which are off by default.
+
+## Reference repos (notes only, no code pulled)
+
+- **react-native-dev-inspector** (JS-only)
+  - Uses RN internal `getInspectorDataForViewAtPoint` import paths (no native module).
+  - Filters hierarchy via skip lists (internal component names).
+  - Has “open in editor” via Metro middleware endpoint.
+  - Optional source inference from `testID` and `_debugSource`/`_debugOwner`.
+- **react-native-harness**
+  - Device test runner; not relevant for inspector pipeline.
+- **rozenite**
+  - DevTools plugin runtime in browser panels; not relevant for element picker overlay. 
+
+## Latest UI additions (panel)
+
+- Tabs: Overview / Props / Raw.
+- Toggle chips:
+  - React Stack: Short / Full
+  - Source: Short / Raw (Short shows basename)
+  - Hierarchy: Fiber On / Off
+- Props: search + copy-to-clipboard.
+- Payload (Raw tab): copy-to-clipboard.
+- “Open in editor” uses the dev-server `/open-stack-frame` endpoint when available.
 
 ## Lifecycle (current flow)
 
@@ -107,7 +140,8 @@ React inspector payloads are generated in JS and sent to the overlay via
 
 2) **Host runtime delegate**
 - **File:** `ios/Exponent/Versioned/Core/EXBloomInspectorManager.mm`
-- Swizzle `RCTHost start` to attach a runtime delegate (injection currently disabled).
+- Swizzle `RCTHost start` to attach a runtime delegate and evaluate `kBloomInspectorInjectionScript`
+  (used for React-aware payload fallback and better source resolution).
 
 3) **Dev menu toggle**
 - **File:** `ios/Exponent/Versioned/Core/EXVersionManagerObjC.mm`

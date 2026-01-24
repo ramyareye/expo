@@ -16,6 +16,15 @@
 #import <objc/runtime.h>
 #import <string>
 
+static const BOOL kBloomInspectorDebugLogs = NO;
+static const BOOL kBloomInspectorEnableNativeFallback = NO;
+#define BLOOM_LOG(...)         \
+  do {                         \
+    if (kBloomInspectorDebugLogs) { \
+      NSLog(__VA_ARGS__);      \
+    }                          \
+  } while (0)
+
 static const char kBloomInspectorInjectionScript[] = R"JS(
 (function () {
   var g = typeof globalThis !== 'undefined' ? globalThis : typeof global !== 'undefined' ? global : typeof window !== 'undefined' ? window : this;
@@ -23,6 +32,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
     return;
   }
   g.__bloomInspectorRuntimeInstalled = true;
+  var DEBUG_LOGS = !!g.__bloomInspectorDebugLogs;
 
   var pendingLogs = [];
   function flushLogs() {
@@ -54,6 +64,9 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
   }
 
   function log(message) {
+    if (!DEBUG_LOGS) {
+      return;
+    }
     var hostId = g.__bloomInspectorHostId != null ? g.__bloomInspectorHostId : 'unknown';
     var text = 'Bloom Log: ' + message + ' host=' + hostId;
     pendingLogs.push(text);
@@ -85,18 +98,6 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
     var fabricKeys = fabricManager ? Object.keys(fabricManager) : [];
     log('34 nativeFabricUIManager=' + String(!!fabricManager) + ' keys=' + fabricKeys.slice(0, 6).join(','));
   } catch (e) {}
-  try {
-    if (typeof setTimeout === 'function') {
-      setTimeout(function () {
-        log('35 prelude installed (delayed)=' + String(g.__bloomInspectorPreludeInstalled));
-      }, 1000);
-      setTimeout(function () {
-        log('36 prelude installed (delayed)=' + String(g.__bloomInspectorPreludeInstalled));
-      }, 3000);
-    } else {
-      log('35 prelude installed (delayed)=no-timer');
-    }
-  } catch (e) {}
 
   function observeHook(targetHook, label) {
     if (!targetHook || targetHook.__bloomInspectorObserved) {
@@ -110,33 +111,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
     if (targetHook.renderers && typeof targetHook.renderers.set === 'function') {
       var originalSet = targetHook.renderers.set.bind(targetHook.renderers);
       targetHook.renderers.set = function (id, renderer) {
-        log('71 renderer injected id=' + id);
         g.__bloomInspectorRenderers.push(renderer);
-        try {
-          if (renderer && renderer.rendererConfig) {
-            var keys = Object.keys(renderer.rendererConfig);
-            log('73 rendererConfig keys=' + keys.slice(0, 8).join(','));
-            log('73 rendererConfig hasTag=' + String(typeof renderer.rendererConfig.getInspectorDataForViewTag === 'function') +
-              ' hasPoint=' + String(typeof renderer.rendererConfig.getInspectorDataForViewAtPoint === 'function') +
-              ' hasInstance=' + String(typeof renderer.rendererConfig.getInspectorDataForInstance === 'function'));
-          }
-          if (renderer) {
-            log('73 renderer hasFindByNativeTag=' +
-              String(typeof renderer.findHostInstanceByNativeTag === 'function'));
-            try {
-              var proto = Object.getPrototypeOf(renderer);
-              var protoKeys = proto ? Object.getOwnPropertyNames(proto) : [];
-              var fnKeys = protoKeys.filter(function (key) {
-                try {
-                  return typeof renderer[key] === 'function';
-                } catch (e) {
-                  return false;
-                }
-              });
-              log('73 renderer protoFns=' + fnKeys.slice(0, 8).join(','));
-            } catch (e) {}
-          }
-        } catch (e) {}
         return originalSet(id, renderer);
       };
     }
@@ -144,33 +119,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
       var originalInject = targetHook.inject.bind(targetHook);
       targetHook.inject = function (renderer) {
         var id = originalInject(renderer);
-        log('71 renderer injected id=' + id);
         g.__bloomInspectorRenderers.push(renderer);
-        try {
-          if (renderer && renderer.rendererConfig) {
-            var keys = Object.keys(renderer.rendererConfig);
-            log('73 rendererConfig keys=' + keys.slice(0, 8).join(','));
-            log('73 rendererConfig hasTag=' + String(typeof renderer.rendererConfig.getInspectorDataForViewTag === 'function') +
-              ' hasPoint=' + String(typeof renderer.rendererConfig.getInspectorDataForViewAtPoint === 'function') +
-              ' hasInstance=' + String(typeof renderer.rendererConfig.getInspectorDataForInstance === 'function'));
-          }
-          if (renderer) {
-            log('73 renderer hasFindByNativeTag=' +
-              String(typeof renderer.findHostInstanceByNativeTag === 'function'));
-            try {
-              var proto = Object.getPrototypeOf(renderer);
-              var protoKeys = proto ? Object.getOwnPropertyNames(proto) : [];
-              var fnKeys = protoKeys.filter(function (key) {
-                try {
-                  return typeof renderer[key] === 'function';
-                } catch (e) {
-                  return false;
-                }
-              });
-              log('73 renderer protoFns=' + fnKeys.slice(0, 8).join(','));
-            } catch (e) {}
-          }
-        } catch (e) {}
         return id;
       };
     }
@@ -447,28 +396,6 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
       } else {
         log('38 overlay module sendPick');
       }
-      if (payloadToSend) {
-        try {
-          log('38-1 js payload keys=' + Object.keys(payloadToSend).join(','));
-        } catch (e) {}
-        try {
-          var preview = {
-            touchID: payloadToSend.touchID,
-            payloadSource: payloadToSend.payloadSource,
-            hasSource: !!payloadToSend.source,
-            componentStack: payloadToSend.componentStack
-              ? String(payloadToSend.componentStack).split('\n').slice(0, 3).join(' > ')
-              : undefined,
-            propsKeys: payloadToSend.props ? Object.keys(payloadToSend.props).slice(0, 5) : [],
-          };
-          log('38-2 js payload preview=' + JSON.stringify(preview));
-        } catch (e) {}
-        try {
-          log('38-3 js payload full=' + JSON.stringify(payloadToSend));
-        } catch (e) {
-          log('38-3 js payload full=unserializable');
-        }
-      }
       if (overlayModule && overlayModule.sendPick) {
         overlayModule.sendPick(payloadToSend);
       } else if (inspectorForwarder) {
@@ -658,6 +585,61 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
       lineNumber: source.lineNumber,
       columnNumber: source.columnNumber != null ? source.columnNumber : 1,
     };
+  }
+
+  function getSourceFromProps(props) {
+    if (!props) {
+      return null;
+    }
+    var candidate = props.__bloomSource || props.__source;
+    if (!candidate || typeof candidate !== 'object') {
+      return null;
+    }
+    var fileName = candidate.fileName;
+    var lineNumber = candidate.lineNumber;
+    var columnNumber = candidate.columnNumber;
+    if (typeof fileName !== 'string' || typeof lineNumber !== 'number') {
+      return null;
+    }
+    return {
+      fileName: fileName,
+      lineNumber: lineNumber,
+      columnNumber: typeof columnNumber === 'number' ? columnNumber : 1,
+    };
+  }
+
+  function isBundleUrl(fileName) {
+    if (!fileName) {
+      return false;
+    }
+    return (
+      (typeof fileName === 'string' && (fileName.indexOf('http://') === 0 || fileName.indexOf('https://') === 0)) ||
+      (typeof fileName === 'string' && fileName.indexOf('index.bundle') !== -1)
+    );
+  }
+
+  function isNodeModulesPath(fileName) {
+    if (!fileName || typeof fileName !== 'string') {
+      return false;
+    }
+    return fileName.indexOf('/node_modules/') !== -1;
+  }
+
+  function scoreSource(fileName) {
+    if (!fileName) {
+      return -1;
+    }
+    var score = 0;
+    if (!isBundleUrl(fileName)) {
+      score += 2;
+    }
+    if (!isNodeModulesPath(fileName)) {
+      score += 3;
+    }
+    if (typeof fileName === 'string' && fileName.indexOf('/apps/') !== -1) {
+      score += 1;
+    }
+    return score;
   }
 
   function findNearestUserFiberWithSource(fiber) {
@@ -952,30 +934,6 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
     var modules = r.getModules();
     if (!modules) {
       return null;
-    }
-    if (!g.__bloomInspectorModuleDumped) {
-      try {
-        var entries = [];
-        if (typeof modules.forEach === 'function') {
-          modules.forEach(function (value, key) {
-            if (value && value.verboseName) {
-              entries.push(key + ':' + value.verboseName);
-            }
-          });
-        } else if (typeof modules === 'object') {
-          for (var key in modules) {
-            var value = modules[key];
-            if (value && value.verboseName) {
-              entries.push(key + ':' + value.verboseName);
-            }
-          }
-        }
-        entries.sort();
-        var preview = entries.slice(0, 40).join(', ');
-        log('62 module ids preview=' + preview);
-        log('62 module ids count=' + entries.length);
-        g.__bloomInspectorModuleDumped = true;
-      } catch (e) {}
     }
     var foundId = null;
     var exactId = null;
@@ -1300,12 +1258,59 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
                     var nearestFiber = findNearestUserFiberWithSource(fiberFromViewData);
                     var fiberHierarchy = buildHierarchyFromFiber(fiberFromViewData);
                     var fiberStack = stackNames.length ? stackNames.join(' > ') : undefined;
+                    var candidateSources = [];
                     var fiberSource = nearestFiber ? nearestFiber.codeInfo : getCodeInfoFromFiber(fiberFromViewData);
-                    if (fiberStack) {
+                    if (fiberSource) {
+                      candidateSources.push(fiberSource);
+                    }
+                    var nearestPropsSource = getSourceFromProps(nearestFiber && nearestFiber.fiber ? nearestFiber.fiber.memoizedProps : null);
+                    var fiberPropsSource = getSourceFromProps(fiberFromViewData.memoizedProps);
+                    if (nearestPropsSource) {
+                      candidateSources.push(nearestPropsSource);
+                    }
+                    if (fiberPropsSource) {
+                      candidateSources.push(fiberPropsSource);
+                    }
+                    var current = fiberFromViewData;
+                    var depth = 0;
+                    while (current && depth < 30) {
+                      var currentSource = getCodeInfoFromFiber(current);
+                      if (currentSource) {
+                        candidateSources.push(currentSource);
+                      }
+                      var currentPropsSource = getSourceFromProps(current.memoizedProps);
+                      if (currentPropsSource) {
+                        candidateSources.push(currentPropsSource);
+                      }
+                      if (current._debugOwner) {
+                        var ownerSource = getCodeInfoFromFiber(current._debugOwner);
+                        if (ownerSource) {
+                          candidateSources.push(ownerSource);
+                        }
+                        var ownerPropsSource = getSourceFromProps(current._debugOwner.memoizedProps);
+                        if (ownerPropsSource) {
+                          candidateSources.push(ownerPropsSource);
+                        }
+                      }
+                      current = current.return;
+                      depth += 1;
+                    }
+                    if (!rawStack && fiberStack) {
                       viewData.componentStack = fiberStack;
                     }
-                    if (fiberSource) {
-                      viewData.source = fiberSource;
+                    if (candidateSources.length) {
+                      var bestSource = candidateSources[0] || null;
+                      var bestScore = scoreSource(bestSource ? bestSource.fileName : null);
+                      for (var cs = 0; cs < candidateSources.length; cs++) {
+                        var score = scoreSource(candidateSources[cs] ? candidateSources[cs].fileName : null);
+                        if (score > bestScore) {
+                          bestScore = score;
+                          bestSource = candidateSources[cs];
+                        }
+                      }
+                      if (bestSource) {
+                        viewData.source = bestSource;
+                      }
                     }
                     if (fiberHierarchy.length) {
                       viewData.hierarchy = fiberHierarchy;
@@ -1412,11 +1417,60 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
             var stackNames = buildComponentStackFromFiber(fiber);
             var nearest = findNearestUserFiberWithSource(fiber);
             var hierarchy = buildHierarchyFromFiber(fiber);
+            var candidateSources = [];
+            var fiberSource = nearest ? nearest.codeInfo : (fiber._debugSource || null);
+            if (fiberSource) {
+              candidateSources.push(fiberSource);
+            }
+            var nearestPropsSource = getSourceFromProps(nearest && nearest.fiber ? nearest.fiber.memoizedProps : null);
+            var fiberPropsSource = getSourceFromProps(fiber.memoizedProps);
+            if (nearestPropsSource) {
+              candidateSources.push(nearestPropsSource);
+            }
+            if (fiberPropsSource) {
+              candidateSources.push(fiberPropsSource);
+            }
+            var current = fiber;
+            var depth = 0;
+            while (current && depth < 30) {
+              var currentSource = getCodeInfoFromFiber(current);
+              if (currentSource) {
+                candidateSources.push(currentSource);
+              }
+              var currentPropsSource = getSourceFromProps(current.memoizedProps);
+              if (currentPropsSource) {
+                candidateSources.push(currentPropsSource);
+              }
+              if (current._debugOwner) {
+                var ownerSource = getCodeInfoFromFiber(current._debugOwner);
+                if (ownerSource) {
+                  candidateSources.push(ownerSource);
+                }
+                var ownerPropsSource = getSourceFromProps(current._debugOwner.memoizedProps);
+                if (ownerPropsSource) {
+                  candidateSources.push(ownerPropsSource);
+                }
+              }
+              current = current.return;
+              depth += 1;
+            }
+            var bestSource = null;
+            if (candidateSources.length) {
+              bestSource = candidateSources[0] || null;
+              var bestScore = scoreSource(bestSource ? bestSource.fileName : null);
+              for (var cs = 0; cs < candidateSources.length; cs++) {
+                var score = scoreSource(candidateSources[cs] ? candidateSources[cs].fileName : null);
+                if (score > bestScore) {
+                  bestScore = score;
+                  bestSource = candidateSources[cs];
+                }
+              }
+            }
             var fiberData = {
               hierarchy: hierarchy,
               selectedIndex: hierarchy.length ? hierarchy.length - 1 : 0,
               props: fiber.memoizedProps,
-              source: nearest ? nearest.codeInfo : (fiber._debugSource || null),
+              source: bestSource,
               componentStack: stackNames.length ? stackNames.join(' > ') : undefined,
               frame: payload.frame || null,
             };
@@ -1481,7 +1535,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
 )JS";
 
 static NSTimeInterval kBloomInspectorLastJSPickTime = 0;
-static const NSTimeInterval kBloomInspectorFallbackDelaySeconds = 0.35;
+static const NSTimeInterval kBloomInspectorFallbackDelaySeconds = 0.05;
 static const NSTimeInterval kBloomInspectorSuppressWindowSeconds = 1.0;
 
 // ------------------------------------------------------------
@@ -1495,15 +1549,15 @@ static const NSTimeInterval kBloomInspectorSuppressWindowSeconds = 1.0;
 
 - (void)host:(RCTHost *)host didInitializeRuntime:(facebook::jsi::Runtime &)runtime
 {
-  NSLog(@"Bloom Log: 39 injecting JS runtime for host: %@", host);
+  BLOOM_LOG(@"Bloom Log: 39 injecting JS runtime for host: %@", host);
   try {
     auto script = std::make_shared<facebook::jsi::StringBuffer>(kBloomInspectorInjectionScript);
     runtime.evaluateJavaScript(script, "BloomInspectorRuntime.js");
-    NSLog(@"Bloom Log: 44 runtime script evaluated");
+    BLOOM_LOG(@"Bloom Log: 44 runtime script evaluated");
     bool hasFlag = runtime.global().hasProperty(runtime, "__bloomInspectorRuntimeInstalled");
-    NSLog(@"Bloom Log: 50 runtime flag=%@", hasFlag ? @"YES" : @"NO");
+    BLOOM_LOG(@"Bloom Log: 50 runtime flag=%@", hasFlag ? @"YES" : @"NO");
     bool preludeFlag = runtime.global().hasProperty(runtime, "__bloomInspectorPreludeInstalled");
-    NSLog(@"Bloom Log: 52 prelude flag=%@", preludeFlag ? @"YES" : @"NO");
+    BLOOM_LOG(@"Bloom Log: 52 prelude flag=%@", preludeFlag ? @"YES" : @"NO");
     NSString *hostId = [NSString stringWithFormat:@"%p", host];
     NSString *setHostIdScript =
         [NSString stringWithFormat:@"try{var g=globalThis||global||this;g.__bloomInspectorHostId='%@';}catch(e){}",
@@ -1516,7 +1570,7 @@ static const NSTimeInterval kBloomInspectorSuppressWindowSeconds = 1.0;
         "if(m&&m.log){m.log('Bloom Log: 51 runtime log bridge ok');}}catch(e){}";
     runtime.evaluateJavaScript(std::make_shared<facebook::jsi::StringBuffer>(pingScript), "BloomInspectorRuntimePing.js");
   } catch (const std::exception &e) {
-    NSLog(@"Bloom Log: 44 runtime script failed: %s", e.what());
+    BLOOM_LOG(@"Bloom Log: 44 runtime script failed: %s", e.what());
   }
 }
 
@@ -1557,9 +1611,9 @@ id<RCTHostRuntimeDelegate> EXGetBloomInspectorRuntimeDelegate(void)
   BOOL shouldAttach = [delegateName containsString:@"ExpoAppInstance"] || [delegateName containsString:@"ExpoGoReactNativeFactory"];
   if (!self.runtimeDelegate && shouldAttach) {
     self.runtimeDelegate = EXGetBloomInspectorRuntimeDelegate();
-    NSLog(@"Bloom Log: 48 runtime delegate attached via swizzle (delegate=%@)", delegateName);
+    BLOOM_LOG(@"Bloom Log: 48 runtime delegate attached via swizzle (delegate=%@)", delegateName);
   } else if (!self.runtimeDelegate) {
-    NSLog(@"Bloom Log: 48 runtime delegate skipped (delegate=%@)", delegateName);
+    BLOOM_LOG(@"Bloom Log: 48 runtime delegate skipped (delegate=%@)", delegateName);
   }
 
   [self ex_bloomInspector_start];
@@ -1587,6 +1641,7 @@ static void EXBloomInspectorSwizzleHostStart(void)
 @interface EXBloomInspectorOverlayView : UIView
 @property (nonatomic, strong) UIView *highlightView;
 @property (nonatomic, strong) UILabel *label;
+- (void)resetSelection;
 @end
 
 @implementation EXBloomInspectorOverlayView
@@ -1635,14 +1690,14 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
 - (void)_handleTap:(UITapGestureRecognizer *)gesture
 {
   CGPoint point = [gesture locationInView:self];
-  NSLog(@"Bloom Log: 9 tap %.1f %.1f", point.x, point.y);
+  BLOOM_LOG(@"Bloom Log: 9 tap %.1f %.1f", point.x, point.y);
   [self _inspectAtPoint:point];
 }
 
 - (void)_handlePan:(UIPanGestureRecognizer *)gesture
 {
   CGPoint point = [gesture locationInView:self];
-  NSLog(@"Bloom Log: 10 pan %.1f %.1f", point.x, point.y);
+  BLOOM_LOG(@"Bloom Log: 10 pan %.1f %.1f", point.x, point.y);
   [self _inspectAtPoint:point];
 }
 
@@ -1658,7 +1713,7 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
   UIView *rootView = [self _visibleAppRootView];
   UIWindow *rootWindow = rootView.window;
   if (!rootView || !rootWindow || !self.window) {
-    NSLog(@"Bloom Log: 11 missing rootView/window");
+    BLOOM_LOG(@"Bloom Log: 11 missing rootView/window");
     _highlightView.hidden = YES;
     _label.hidden = YES;
     return;
@@ -1669,12 +1724,12 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
 
   UIView *hitView = [rootView hitTest:pointInRoot withEvent:nil];
   if (!hitView) {
-    NSLog(@"Bloom Log: 12 hitTest returned nil");
+    BLOOM_LOG(@"Bloom Log: 12 hitTest returned nil");
     _highlightView.hidden = YES;
     _label.hidden = YES;
     return;
   }
-  NSLog(@"Bloom Log: 13 hitView=%@", NSStringFromClass([hitView class]));
+  BLOOM_LOG(@"Bloom Log: 13 hitView=%@", NSStringFromClass([hitView class]));
 
   EXBloomInspector *inspectorModule = EXGetBloomInspectorModuleForVisibleApp();
   if (inspectorModule) {
@@ -1694,9 +1749,9 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
       rootTag = rootView.reactTag;
     }
     if (viewTag) {
-      NSLog(@"Bloom Log: 14 emitTap viewTag=%@", viewTag);
+      BLOOM_LOG(@"Bloom Log: 14 emitTap viewTag=%@", viewTag);
     } else {
-      NSLog(@"Bloom Log: 14 emitTap viewTag=<nil>");
+      BLOOM_LOG(@"Bloom Log: 14 emitTap viewTag=<nil>");
     }
     NSMutableDictionary *payload = [@{
       @"x": @(pointInRootWindow.x),
@@ -1711,13 +1766,13 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
     }
     [inspectorModule emitTap:payload];
   } else {
-    NSLog(@"Bloom Log: 14 emitTap skipped (no module)");
+    BLOOM_LOG(@"Bloom Log: 14 emitTap skipped (no module)");
   }
 
   // JS-side listener is attached via NativeEventEmitter on BloomInspector.
 
   BOOL inspectorAvailable = [self _emitReactInspectorDataForPoint:pointInRoot hitView:hitView touchID:touchID];
-  NSLog(@"Bloom Log: 15 inspectorAvailable=%@", inspectorAvailable ? @"YES" : @"NO");
+  BLOOM_LOG(@"Bloom Log: 15 inspectorAvailable=%@", inspectorAvailable ? @"YES" : @"NO");
 
   CGRect rectInRootWindow = [hitView convertRect:hitView.bounds toView:rootWindow];
   CGRect rectInOverlayWindow = [self.window convertRect:rectInRootWindow fromWindow:rootWindow];
@@ -1738,7 +1793,7 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
     depth += 1;
   }
 
-  if (!inspectorAvailable) {
+  if (!inspectorAvailable && kBloomInspectorEnableNativeFallback) {
     NSMutableArray<NSDictionary *> *hierarchy = [NSMutableArray arrayWithCapacity:names.count];
     for (NSString *name in names) {
       [hierarchy addObject:@{ @"name": name }];
@@ -1787,19 +1842,19 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
       @"componentStack": [names componentsJoinedByString:@" > "],
     };
 
-    NSLog(@"Bloom Log: 16 scheduling fallback native payload");
+    BLOOM_LOG(@"Bloom Log: 16 scheduling fallback native payload");
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kBloomInspectorFallbackDelaySeconds * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
       NSTimeInterval delta = CFAbsoluteTimeGetCurrent() - kBloomInspectorLastJSPickTime;
       if (delta < kBloomInspectorSuppressWindowSeconds) {
-        NSLog(@"Bloom Log: 16 fallback native payload suppressed (recent JS pick)");
+        BLOOM_LOG(@"Bloom Log: 16 fallback native payload suppressed (recent JS pick)");
         return;
       }
       EXBloomInspectorOverlay *module = EXGetBloomInspectorOverlayModule();
       if (module) {
         [module emitPick:payload];
       } else {
-        NSLog(@"Bloom Log: 16 fallback emitPick skipped (no module)");
+        BLOOM_LOG(@"Bloom Log: 16 fallback emitPick skipped (no module)");
       }
     });
   }
@@ -1810,7 +1865,7 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
   EXKernelAppRecord *visibleApp = [EXKernel sharedInstance].visibleApp;
   id host = visibleApp.appManager.reactHost;
   if (!host || ![host respondsToSelector:@selector(moduleRegistry)]) {
-    NSLog(@"Bloom Log: 17 no react host/moduleRegistry");
+    BLOOM_LOG(@"Bloom Log: 17 no react host/moduleRegistry");
     return NO;
   }
   id moduleRegistry = [host moduleRegistry];
@@ -1819,23 +1874,23 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
     uiManager = [moduleRegistry moduleForName:"RCTUIManager"];
   }
   if (!uiManager) {
-    NSLog(@"Bloom Log: 18 UIManager not found");
+    BLOOM_LOG(@"Bloom Log: 18 UIManager not found");
     return NO;
   }
-  NSLog(@"Bloom Log: 19 UIManager=%@", NSStringFromClass([uiManager class]));
+  BLOOM_LOG(@"Bloom Log: 19 UIManager=%@", NSStringFromClass([uiManager class]));
 
   SEL selector = NSSelectorFromString(@"getInspectorDataForViewAtPoint:callback:");
   if ([uiManager respondsToSelector:selector]) {
-    NSLog(@"Bloom Log: 20 calling getInspectorDataForViewAtPoint");
+    BLOOM_LOG(@"Bloom Log: 20 calling getInspectorDataForViewAtPoint");
     NSMethodSignature *signature = [uiManager methodSignatureForSelector:selector];
     if (!signature || signature.numberOfArguments < 4) {
-      NSLog(@"Bloom Log: 21 invalid signature for getInspectorDataForViewAtPoint");
+      BLOOM_LOG(@"Bloom Log: 21 invalid signature for getInspectorDataForViewAtPoint");
       return NO;
     }
 
     void (^callback)(id) = ^(id result) {
       NSDictionary *payload = nil;
-      NSLog(@"Bloom Log: 22 inspector raw=%@", result);
+      BLOOM_LOG(@"Bloom Log: 22 inspector raw=%@", result);
       if ([result isKindOfClass:[NSArray class]] && [(NSArray *)result count] > 0) {
         id first = [(NSArray *)result firstObject];
         if ([first isKindOfClass:[NSDictionary class]]) {
@@ -1855,7 +1910,7 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
         if (module) {
           [module emitPick:mutablePayload];
         } else {
-          NSLog(@"Bloom Log: 23 emitPick skipped (no overlay module)");
+          BLOOM_LOG(@"Bloom Log: 23 emitPick skipped (no overlay module)");
         }
       }
     };
@@ -1868,7 +1923,7 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
     id callbackCopy = [callback copy];
     [invocation setArgument:&callbackCopy atIndex:3];
     [invocation invoke];
-    NSLog(@"Bloom Log: 24 invoked getInspectorDataForViewAtPoint");
+    BLOOM_LOG(@"Bloom Log: 24 invoked getInspectorDataForViewAtPoint");
     return YES;
   }
 
@@ -1876,20 +1931,20 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
   if ([uiManager respondsToSelector:tagSelector] && [hitView respondsToSelector:@selector(reactTag)]) {
     NSNumber *tag = hitView.reactTag;
     if (!tag) {
-      NSLog(@"Bloom Log: 25 viewTag missing");
+      BLOOM_LOG(@"Bloom Log: 25 viewTag missing");
       return NO;
     }
 
-    NSLog(@"Bloom Log: 26 calling getInspectorDataForViewTag tag=%@", tag);
+    BLOOM_LOG(@"Bloom Log: 26 calling getInspectorDataForViewTag tag=%@", tag);
     NSMethodSignature *signature = [uiManager methodSignatureForSelector:tagSelector];
     if (!signature || signature.numberOfArguments < 4) {
-      NSLog(@"Bloom Log: 27 invalid signature for getInspectorDataForViewTag");
+      BLOOM_LOG(@"Bloom Log: 27 invalid signature for getInspectorDataForViewTag");
       return NO;
     }
 
     void (^callback)(id) = ^(id result) {
       NSDictionary *payload = nil;
-      NSLog(@"Bloom Log: 28 inspector raw=%@", result);
+      BLOOM_LOG(@"Bloom Log: 28 inspector raw=%@", result);
       if ([result isKindOfClass:[NSArray class]] && [(NSArray *)result count] > 0) {
         id first = [(NSArray *)result firstObject];
         if ([first isKindOfClass:[NSDictionary class]]) {
@@ -1904,7 +1959,7 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
         if (module) {
           [module emitPick:payload];
         } else {
-          NSLog(@"Bloom Log: 29 emitPick skipped (no overlay module)");
+          BLOOM_LOG(@"Bloom Log: 29 emitPick skipped (no overlay module)");
         }
       }
     };
@@ -1917,12 +1972,19 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
     id callbackCopy = [callback copy];
     [invocation setArgument:&callbackCopy atIndex:3];
     [invocation invoke];
-    NSLog(@"Bloom Log: 30 invoked getInspectorDataForViewTag");
+    BLOOM_LOG(@"Bloom Log: 30 invoked getInspectorDataForViewTag");
     return YES;
   }
 
-  NSLog(@"Bloom Log: 31 UIManager missing inspector selectors");
+  BLOOM_LOG(@"Bloom Log: 31 UIManager missing inspector selectors");
   return NO;
+}
+
+- (void)resetSelection
+{
+  _highlightView.hidden = YES;
+  _label.hidden = YES;
+  _highlightView.frame = CGRectZero;
 }
 
 @end
@@ -2056,6 +2118,7 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void)
     [self.window makeKeyAndVisible];
     self.visible = YES;
     self.hasPanelFrame = NO;
+    [self.viewController.overlayView resetSelection];
     EXBloomInspectorOverlay *module = EXGetBloomInspectorOverlayModule();
     if (module) {
       [module emitToggle:YES];
@@ -2069,6 +2132,7 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void)
     return;
   }
   dispatch_async(dispatch_get_main_queue(), ^{
+    [self.viewController.overlayView resetSelection];
     self.window.hidden = YES;
     [self.previousKeyWindow makeKeyWindow];
     self.visible = NO;
@@ -2133,10 +2197,10 @@ RCT_EXPORT_METHOD(sendPick:(NSDictionary *)payload)
 {
   EXBloomInspectorOverlay *module = EXGetBloomInspectorOverlayModule();
   if (!module) {
-    NSLog(@"Bloom Log: 95 sendPick forwarder missing overlay module");
+    BLOOM_LOG(@"Bloom Log: 95 sendPick forwarder missing overlay module");
     return;
   }
-  NSLog(@"Bloom Log: 95 sendPick forwarder emitPick");
+  BLOOM_LOG(@"Bloom Log: 95 sendPick forwarder emitPick");
   [module emitPick:payload];
 }
 
@@ -2181,6 +2245,11 @@ RCT_EXPORT_METHOD(toggle)
   [[EXBloomInspectorOverlayManager sharedInstance] toggle];
 }
 
+RCT_EXPORT_METHOD(clearSelection)
+{
+  [[[EXBloomInspectorOverlayManager sharedInstance] viewController].overlayView resetSelection];
+}
+
 RCT_EXPORT_METHOD(setPanelFrame:(NSDictionary *)frame)
 {
   NSNumber *x = frame[@"x"];
@@ -2206,29 +2275,29 @@ RCT_EXPORT_METHOD(sendPick:(NSDictionary *)payload)
 {
   EXBloomInspectorOverlay *module = EXGetBloomInspectorOverlayModule();
   if (!module) {
-    NSLog(@"Bloom Log: 95 sendPick missing overlay module");
+    BLOOM_LOG(@"Bloom Log: 95 sendPick missing overlay module");
     return;
   }
   kBloomInspectorLastJSPickTime = CFAbsoluteTimeGetCurrent();
-  NSLog(@"Bloom Log: 95 sendPick emitPick hasListeners=%@", module->_hasListeners ? @"YES" : @"NO");
+  BLOOM_LOG(@"Bloom Log: 95 sendPick emitPick hasListeners=%@", module->_hasListeners ? @"YES" : @"NO");
   [module emitPick:payload];
 }
 
 RCT_EXPORT_METHOD(log:(NSString *)message)
 {
-  if (message.length == 0) {
+  if (!kBloomInspectorDebugLogs || message.length == 0) {
     return;
   }
-  NSLog(@"Bloom Log: %@", message);
+  BLOOM_LOG(@"Bloom Log: %@", message);
 }
 
 - (void)emitPick:(NSDictionary *)payload
 {
   if (_hasListeners) {
-    NSLog(@"Bloom Log: 95 emitPick sending event");
+    BLOOM_LOG(@"Bloom Log: 95 emitPick sending event");
     [self sendEventWithName:@"bloomInspectorOverlayPick" body:payload];
   } else {
-    NSLog(@"Bloom Log: 95 emitPick no listeners");
+    BLOOM_LOG(@"Bloom Log: 95 emitPick no listeners");
   }
 }
 

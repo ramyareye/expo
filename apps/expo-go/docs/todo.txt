@@ -7,13 +7,14 @@ Done (Dev menu toggle works).
 Visual selection
 Done (pink highlight border).
 Props inspector
-Done (props list in overlay panel).
+Done (props list + search + copy in overlay panel).
 Code location (file + line)
-Done when JS payload is present (panel prefers React stack/source over host hierarchy).
+Done (prefers `__bloomSource`/`__source` when available; falls back to fiber debug source + symbolication).
 Next steps (ordered)
 
-Validate props display from JS payload (no filtering or missing values).
-Confirm panel renders React hierarchy/source consistently across screens.
+Confirm panel renders React hierarchy/source consistently across screens and routers.
+Decide expected behavior for library/native components:
+- show library file (`node_modules/...`) vs try to attribute to usage site (nearest app-level `__bloomSource` owner).
 
 Fiber-based React name fallback (match react-native-dev-inspector)
 
@@ -25,10 +26,14 @@ Verify source is present in payload (Babel jsx-source is on in dev).
 If missing, add fallback to show first line from componentStack.
 Trim debug logs
 
-Remove noisy Bloom Log lines and keep essential ones.
+Gate verbose Bloom Log lines behind a local debug flag.
+Status: done (native + JS).
 Decide on fallback timing (native vs JS)
 
-Confirm whether to keep or remove the 0.35s native fallback delay (see EXBloomInspectorManager.mm).
+Confirm whether to keep or remove the 0.2s native fallback delay (see EXBloomInspectorManager.mm).
+Open in editor action
+
+Done (opens local `*.tsx` paths via `/open-stack-frame`; avoids `/symbolicate` when `__bloomSource` is present).
 Delivery pipeline hardening (Option A)
 
 Forward JS inspector payload via `BloomInspector.sendPick` when `BloomInspectorOverlay` is missing (multi-runtime fix).
@@ -39,7 +44,7 @@ Summarize final behavior + how to run and test (in your bloom-inspector-native-n
 Optional/bonus
 
 Better hierarchy formatting
-Prop filters / search
+Prop filters / search (done)
 Source snippet if needed
 Hermes custom build to enable bundle prelude execution (research later)
 Delivery pipeline (Option B, later)
@@ -47,3 +52,17 @@ Delivery pipeline (Option B, later)
 Make `BloomInspectorOverlay` module available in experience runtime so JS can call `BloomInspectorOverlay.sendPick` directly.
 If you want, I can start with step 1 now (React stack + source display).
 source : https://github.com/facebook/hermes/blob/main/doc/ReactNativeIntegration.md#using-a-custom-hermes-build-in-a-react-native-app
+
+ add this to bable ? // if (process.env.NODE_ENV === 'production') return; add this ?
+ 4. Consider JSXElement instead of JSXOpeningElement
+
+ cannot find source of this one (maybe cause its' in node_models) ? 
+ import { Button, ScrollView, StyleSheet, View, Text } from 'react-native'; <Button title="From asset" />
+
+ Limitation: elements with `pointerEvents="none"` aren’t selectable (e.g. `ComponentListScreen`).
+
+
+whenever you toggle inspector it should unselect what it had before / it can be on close actually
+
+when a component is selected and you change code it should refresh or disable selector if component is not there anymore 
+or select parent idk it's buggy now 
