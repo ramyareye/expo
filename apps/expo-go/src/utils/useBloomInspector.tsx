@@ -21,6 +21,125 @@ import type {
   InspectorViewData,
 } from 'src/mobileInspector/inspectorTypes';
 
+function storeLiveEditTargetFromViewData(viewData: InspectorViewData | null | undefined) {
+  try {
+    if (!viewData) {
+      return;
+    }
+    const g = globalThis as any;
+    const debug = Boolean(g.__bloomInspectorDebugLiveEdit);
+
+    const raw: any = viewData as any;
+    const candidates = [
+      { label: 'closestPublicInstance', value: raw.closestPublicInstance },
+      { label: 'publicInstance', value: raw.publicInstance },
+      { label: 'closestInstance', value: raw.closestInstance },
+      { label: 'inspected', value: raw.inspected },
+      { label: 'closestInternalInstance', value: raw.closestInternalInstance },
+    ];
+
+    const hasSetNativeProps = (value: any) =>
+      Boolean(value && typeof value.setNativeProps === 'function');
+    const hasNativeTag = (value: any) =>
+      typeof (value?._nativeTag ?? value?.nativeTag) === 'number';
+    const canSetViaFabric = (value: any) => {
+      const manager = g.nativeFabricUIManager || g.__nativeFabricUIManager || null;
+      const tag = value?._nativeTag ?? value?.nativeTag ?? null;
+      return Boolean(
+        typeof tag === 'number' && manager && typeof manager.setNativeProps === 'function'
+      );
+    };
+
+    const getFiberFromAny = (value: any): any | null => {
+      if (!value) {
+        return null;
+      }
+      if (value.tag != null && value.return !== undefined) {
+        return value;
+      }
+      if (value._reactInternals) {
+        return value._reactInternals;
+      }
+      if (value._internalFiberInstanceHandleDEV) {
+        return value._internalFiberInstanceHandleDEV;
+      }
+      if (value._internalInstanceHandle) {
+        return value._internalInstanceHandle;
+      }
+      try {
+        const keys = Object.keys(value);
+        for (const key of keys) {
+          if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) {
+            return value[key];
+          }
+        }
+      } catch {
+        // ignore
+      }
+      return null;
+    };
+
+    const pickTarget = (): { label: string; target: any } | null => {
+      let fallback: { label: string; target: any } | null = null;
+      for (const candidate of candidates) {
+        const value = candidate.value;
+        if (!value) continue;
+        if (hasSetNativeProps(value) || canSetViaFabric(value)) {
+          return { label: candidate.label, target: value };
+        }
+        if (!fallback && hasNativeTag(value)) {
+          fallback = { label: `${candidate.label} (nativeTag)`, target: value };
+        }
+        if (typeof value.getNode === 'function') {
+          try {
+            const node = value.getNode();
+            if (hasSetNativeProps(node) || canSetViaFabric(node)) {
+              return { label: `${candidate.label}.getNode()`, target: node };
+            }
+            if (!fallback && hasNativeTag(node)) {
+              fallback = { label: `${candidate.label}.getNode() (nativeTag)`, target: node };
+            }
+          } catch {}
+        }
+        const fiber = getFiberFromAny(value);
+        if (fiber) {
+          if (hasSetNativeProps(fiber.stateNode) || canSetViaFabric(fiber.stateNode)) {
+            return { label: `${candidate.label}.fiber.stateNode`, target: fiber.stateNode };
+          }
+          if (!fallback && hasNativeTag(fiber.stateNode)) {
+            fallback = { label: `${candidate.label}.fiber.stateNode (nativeTag)`, target: fiber.stateNode };
+          }
+        }
+      }
+      return fallback;
+    };
+
+    const picked = pickTarget();
+    if (!picked) {
+      if (debug) {
+        console.info('Bloom Inspector: live-edit no target from viewData', {
+          hasClosestPublicInstance: Boolean(raw.closestPublicInstance),
+          hasPublicInstance: Boolean(raw.publicInstance),
+          hasClosestInstance: Boolean(raw.closestInstance),
+          hasInspected: Boolean(raw.inspected),
+        });
+      }
+      return;
+    }
+
+    g.__bloomInspectorLastPublicInstance = picked.target;
+    if (debug) {
+      console.info('Bloom Inspector: live-edit stored target', {
+        label: picked.label,
+        name: picked.target?.constructor?.name ?? null,
+        nativeTag: picked.target?._nativeTag ?? picked.target?.nativeTag ?? null,
+      });
+    }
+  } catch {
+    // ignore
+  }
+}
+
 // type ScreenRootMap = Record<string, React.RefObject<any>>;
 
 type ContextValue = {
@@ -43,6 +162,7 @@ type PickPayload = {
   selectedIndex?: number;
   componentStack?: string;
   source?: { fileName?: string; lineNumber?: number; columnNumber?: number };
+  ownerSource?: { fileName?: string; lineNumber?: number; columnNumber?: number };
   touchID?: number;
   payloadSource?: 'js' | 'native';
 };
@@ -116,6 +236,7 @@ export function BloomInspectorProvider({ children }: { children: React.ReactNode
           if (!data) {
             return false;
           }
+          storeLiveEditTargetFromViewData(data);
           const metadata = getReactMetadataFromViewData(data);
           const pickPayload = toPickPayload(data, metadata);
           if (pickPayload && NativeModules.BloomInspectorOverlay?.sendPick) {
@@ -274,6 +395,7 @@ function toPickPayload(
     payload.componentStack = extra.componentStack;
   }
   const sourceCandidates: NonNullable<PickPayload['source']>[] = [];
+  const ownerSourceCandidates: NonNullable<PickPayload['source']>[] = [];
   const propsSource =
     getSourceFromProps(props) ??
     getSourceFromProps(metadata?.props) ??
@@ -281,12 +403,16 @@ function toPickPayload(
     findSourceInPropsTree(metadata?.props);
   if (propsSource) {
     sourceCandidates.push(propsSource);
+    ownerSourceCandidates.push(propsSource);
     if (DEBUG_BLOOM_LOGS) {
       console.info(`Bloom Log: 38-7 props source=${propsSource.fileName ?? 'none'}`);
     }
   }
   if (metadata?.source) {
     sourceCandidates.push(metadata.source);
+  }
+  if (metadata?.ownerSource) {
+    ownerSourceCandidates.push(metadata.ownerSource);
   }
   if (extra.source) {
     sourceCandidates.push(extra.source);
@@ -308,6 +434,7 @@ function toPickPayload(
           | undefined;
         if (candidate?.fileName) {
           sourceCandidates.push(candidate);
+          ownerSourceCandidates.push(candidate);
           if (DEBUG_BLOOM_LOGS && logged < 12) {
             const name = (item as { name?: string }).name ?? 'unknown';
             console.info(
@@ -325,6 +452,10 @@ function toPickPayload(
   if (bestSource) {
     payload.source = bestSource;
   }
+  const bestOwnerSource = pickOwnerSource(ownerSourceCandidates);
+  if (bestOwnerSource) {
+    payload.ownerSource = bestOwnerSource;
+  }
 
   if (DEBUG_BLOOM_LOGS && sourceCandidates.length) {
     const list = sourceCandidates
@@ -338,6 +469,28 @@ function toPickPayload(
   }
 
   return payload;
+}
+
+function pickOwnerSource(
+  sources: { fileName?: string; lineNumber?: number; columnNumber?: number }[]
+): { fileName?: string; lineNumber?: number; columnNumber?: number } | null {
+  const filtered = sources.filter((source) => {
+    const fileName = source.fileName;
+    return (
+      typeof fileName === 'string' &&
+      !fileName.includes('index.bundle') &&
+      !fileName.startsWith('http://') &&
+      !fileName.startsWith('https://') &&
+      !fileName.includes('/node_modules/') &&
+      typeof source.lineNumber === 'number'
+    );
+  });
+  if (!filtered.length) {
+    return null;
+  }
+  const inApps = filtered.filter((source) => source.fileName?.includes('/apps/'));
+  const list = inApps.length ? inApps : filtered;
+  return pickBestSource(list) ?? list[0] ?? null;
 }
 
 function stripInternalProps(props: Record<string, unknown>): Record<string, unknown> {

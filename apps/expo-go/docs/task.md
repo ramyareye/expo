@@ -27,10 +27,11 @@ Stack
 
 ### Bonus ideas (optional)
 
-- [ ] Live prop editing.
+- [x] Live prop editing (experimental; uses `setNativeProps`).
 - [x] Code preview snippet.
-- [ ] Hierarchy visualization (parent-child tree).
+- [x] Hierarchy visualization (parent-child tree).
 - [x] Props search/filter.
+- [ ] Edit + save props in source (later).
 
 ### Deliverables
 
@@ -42,13 +43,14 @@ Stack
 
 - JS payload merges by touchID; React stack/source/props render in the overlay panel.
 - Native overlay + injected JS can also produce React-aware payloads (fallback path retained).
-- Panel tabs: Overview / Source / Props / Raw.
+- Panel tabs: Overview / Source / Hierarchy / Props / Raw.
 - Panel toggles: React Stack short/full, Source short/raw (basename vs full), Fiber on/off.
 - Source snippet uses Metro endpoint `/bloom-source-snippet` (served by Metro, typically `:8081`).
 - Bloom debug logs are gated off by default.
+- Live edit: view-level props (bg/opacity/border) work via native apply; text edits are unreliable in Fabric because `RCTParagraphComponentView` does not expose a UILabel/UITextView. UIKit/KVC text tweaks may be overwritten on next render. Text background is not supported.
 
 ### Next steps
 
-- [ ] Improve snippet UI readability (background + padding + highlight current line).
-- [ ] Decide behavior for library/native components: show `node_modules` file vs “usage site” attribution.
+- [ ] Decide behavior for library/native components: show `node_modules` file vs “usage site” attribution (now supported via `ownerSource` heuristic; needs validation/tuning).
 - [ ] Handle stale selection after code changes / refresh (clear or reselect).
+- [ ] Decide scope for Live Edit on Text: keep view-only for now vs implement Fabric text mutation (attributed string / shadow tree) or overlay approach.

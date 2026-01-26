@@ -14,7 +14,8 @@ Next steps (ordered)
 
 Confirm panel renders React hierarchy/source consistently across screens and routers.
 Decide expected behavior for library/native components:
-- show library file (`node_modules/...`) vs try to attribute to usage site (nearest app-level `__bloomSource` owner).
+- now supported via `ownerSource` heuristic (prefers nearest non-bundle, non-`node_modules` source; prefers `/apps/`).
+- decide when to prefer “usage site” vs component file, and how to present it in the UI.
 
 Fiber-based React name fallback (match react-native-dev-inspector)
 
@@ -45,8 +46,17 @@ Optional/bonus
 
 Better hierarchy formatting
 Prop filters / search (done)
+Live prop editing via `setNativeProps` (experimental) (done)
+Live Edit (Text on Fabric):
+- Investigate proper Fabric text mutation (attributed string / shadow tree) instead of UIKit fallback.
+- Decide if MVP scope is “View-only” and document Text limitations.
+Text background is not supported (Text draws inline); use color/underline/weight or parent View bg.
+Live Edit (prop persistence):
+- Explore injected JS + event emitter bridge to edit Fiber in app runtime (shadow tree via reconciliation).
+- If pursued, add “persistent mode” toggle and warnings (dev-only, private API).
+AI research notes captured in `apps/expo-go/docs/research/bloom-inspector-ai-notes.md`.
 Source snippet if needed
-Improve snippet UI readability (background + padding + highlight current line).
+Improve snippet UI readability (background + padding + highlight current line). (done)
 Cleanup: disable debug flags by default (e.g. `DEBUG_SOURCE_SNIPPET`) once stable.
 Hermes custom build to enable bundle prelude execution (research later)
 Delivery pipeline (Option B, later)
@@ -63,8 +73,6 @@ source : https://github.com/facebook/hermes/blob/main/doc/ReactNativeIntegration
 
  Limitation: elements with `pointerEvents="none"` aren’t selectable (e.g. `ComponentListScreen`).
 
-
-whenever you toggle inspector it should unselect what it had before / it can be on close actually
-
-when a component is selected and you change code it should refresh or disable selector if component is not there anymore 
-or select parent idk it's buggy now 
+Selection lifecycle
+- Done: toggling/closing clears selection.
+- Pending: handle stale selection after code changes / refresh (clear or reselect).

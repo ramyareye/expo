@@ -116,7 +116,7 @@ This file is a code-oriented map of “everything Bloom Inspector” in Expo Go,
   - Subscribes to `bloomInspectorOverlayPick` and renders the selected element
   - Calls `NativeModules.BloomInspectorOverlay.setPanelFrame(...)` on layout so native overlay ignores touches over the panel
   - Merges native vs JS pick payloads by `touchID` (prefers `payloadSource: 'js'`)
-  - Panel features: Overview/Source/Props/Raw tabs, React Stack Short/Full toggle, props search + copy, open-in-editor via `/open-stack-frame`, source snippet via `/bloom-source-snippet`
+  - Panel features: Overview/Source/Hierarchy/Props/Raw tabs, React Stack Short/Full toggle, props search + copy, open-in-editor via `/open-stack-frame`, source snippet via `/bloom-source-snippet`
 
 ### Build-time source injection (for `source.fileName/lineNumber/columnNumber`)
 - **File:** `babel.config.js` (development only)

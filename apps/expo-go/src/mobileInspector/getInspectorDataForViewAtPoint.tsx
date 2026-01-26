@@ -94,6 +94,7 @@ type Fiber = {
 type ReactInspectorMetadata = {
   componentStack?: string;
   source?: { fileName?: string; lineNumber?: number; columnNumber?: number };
+  ownerSource?: { fileName?: string; lineNumber?: number; columnNumber?: number };
   hierarchy?: { name: string }[];
   props?: Record<string, unknown>;
 };
@@ -510,6 +511,33 @@ function tryFiberLookup(viewTag: number): Fiber | null {
   return null;
 }
 
+function pickOwnerSource(
+  candidateSources: ReactInspectorMetadata['source'][]
+): ReactInspectorMetadata['source'] | null {
+  const filtered = candidateSources.filter(
+    (source) =>
+      source?.fileName &&
+      !isBundleUrl(source.fileName) &&
+      !isNodeModulesPath(source.fileName) &&
+      source.lineNumber != null
+  );
+  if (!filtered.length) {
+    return null;
+  }
+  const inApps = filtered.filter((source) => source?.fileName?.includes('/apps/'));
+  const list = inApps.length ? inApps : filtered;
+  let best = list[0] ?? null;
+  let bestScore = scoreSource(best?.fileName);
+  for (const source of list) {
+    const score = scoreSource(source?.fileName);
+    if (score > bestScore) {
+      best = source ?? null;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 export function getReactMetadataFromViewData(
   viewData: InspectorViewData | null | undefined,
   viewTag?: number
@@ -605,6 +633,10 @@ export function getReactMetadataFromViewData(
       if (bestSource) {
         metadata.source = bestSource;
       }
+    }
+    const ownerSource = pickOwnerSource(candidateSources);
+    if (ownerSource) {
+      metadata.ownerSource = ownerSource;
     }
   }
   if (!metadata.source) {

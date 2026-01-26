@@ -92,6 +92,7 @@ Panel UX notes:
 - React Stack has a Short/Full toggle.
 - Props tab supports search and copy-to-clipboard.
 - Source tab shows a small code snippet preview (served by Metro at `/bloom-source-snippet`).
+- Hierarchy tab shows the parent→child chain as a collapsible tree view.
 
 Dev server note:
 - The snippet endpoint is served by the Metro dev server (typically `:8081`). If you hit the manifest server (often `:80`), you’ll get an Expo manifest JSON instead of a snippet.

@@ -123,7 +123,7 @@ React inspector payloads are generated in JS and sent to the overlay via
 
 ## Latest UI additions (panel)
 
-- Tabs: Overview / Source / Props / Raw.
+- Tabs: Overview / Source / Hierarchy / Props / Edit / Raw.
 - Toggle chips:
   - React Stack: Short / Full
   - Source: Short / Raw (Short shows basename)

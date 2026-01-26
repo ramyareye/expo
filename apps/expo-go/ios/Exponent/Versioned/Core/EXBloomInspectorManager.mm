@@ -9,6 +9,8 @@
 
 #import <Expo/RCTAppDelegateUmbrella.h>
 #import <React/RCTLog.h>
+#import <React/RCTSurfacePresenter.h>
+#import <React/RCTUIManager.h>
 #import <React/RCTUtils.h>
 #import <ReactCommon/RCTHost.h>
 #import <jsi/jsi.h>
@@ -84,6 +86,50 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
       }
     } catch (e) {}
   }
+
+  g.__bloomInspectorLastPublicInstance = null;
+  g.__bloomInspectorClearNativePropsTarget = function () {
+    g.__bloomInspectorLastPublicInstance = null;
+  };
+  g.__bloomInspectorHasNativePropsTarget = function () {
+    var target = g.__bloomInspectorLastPublicInstance;
+    return !!(target && typeof target.setNativeProps === 'function');
+  };
+  g.__bloomInspectorGetNativePropsTargetInfo = function () {
+    try {
+      var target = g.__bloomInspectorLastPublicInstance;
+      if (!target || typeof target.setNativeProps !== 'function') {
+        return { hasTarget: false };
+      }
+      var name = null;
+      try {
+        name = target && target.constructor && target.constructor.name ? target.constructor.name : null;
+      } catch (e) {}
+      var nativeTag = null;
+      try {
+        nativeTag =
+          target && (target._nativeTag != null ? target._nativeTag : target.nativeTag != null ? target.nativeTag : null);
+      } catch (e) {}
+      return { hasTarget: true, name: name, nativeTag: nativeTag };
+    } catch (e) {
+      return { hasTarget: false };
+    }
+  };
+  g.__bloomInspectorApplyNativeProps = function (nextProps) {
+    try {
+      var target = g.__bloomInspectorLastPublicInstance;
+      if (!target || typeof target.setNativeProps !== 'function') {
+        return false;
+      }
+      if (!nextProps || typeof nextProps !== 'object') {
+        return false;
+      }
+      target.setNativeProps(nextProps);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
 
   log('34 runtime script loaded');
   log('34 prelude installed=' + String(g.__bloomInspectorPreludeInstalled));
@@ -240,6 +286,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
         props: undefined,
         selectedIndex: selectedIndex,
         source: undefined,
+        ownerSource: undefined,
         componentStack: normalizedStack.length ? normalizedStack.join('\n') : undefined,
         touchID: touchID != null ? touchID : undefined,
         payloadSource: 'js',
@@ -250,6 +297,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
         payloadToSend.props = sanitize(data.props, 0);
       }
       payloadToSend.source = detailData && detailData.source ? detailData.source : data.source;
+      payloadToSend.ownerSource = detailData && detailData.ownerSource ? detailData.ownerSource : data.ownerSource;
       return payloadToSend;
     }
 
@@ -640,6 +688,36 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
       score += 1;
     }
     return score;
+  }
+
+  function pickOwnerSource(candidateSources) {
+    if (!candidateSources || !candidateSources.length) {
+      return null;
+    }
+    var best = null;
+    for (var i = 0; i < candidateSources.length; i++) {
+      var candidate = candidateSources[i];
+      if (!candidate || !candidate.fileName) {
+        continue;
+      }
+      var fileName = candidate.fileName;
+      if (isBundleUrl(fileName)) {
+        continue;
+      }
+      if (isNodeModulesPath(fileName)) {
+        continue;
+      }
+      if (!best) {
+        best = candidate;
+        continue;
+      }
+      var bestIsApps = typeof best.fileName === 'string' && best.fileName.indexOf('/apps/') !== -1;
+      var candidateIsApps = typeof fileName === 'string' && fileName.indexOf('/apps/') !== -1;
+      if (!bestIsApps && candidateIsApps) {
+        best = candidate;
+      }
+    }
+    return best;
   }
 
   function findNearestUserFiberWithSource(fiber) {
@@ -1251,6 +1329,38 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
                   return;
                 }
                 if (viewData && viewData.hierarchy && viewData.hierarchy.length) {
+                  var publicInstanceForEdit = viewData.closestPublicInstance || viewData.publicInstance || null;
+                  if (publicInstanceForEdit && typeof publicInstanceForEdit.setNativeProps === 'function') {
+                    g.__bloomInspectorLastPublicInstance = publicInstanceForEdit;
+                  } else if (
+                    publicInstanceForEdit &&
+                    (publicInstanceForEdit._nativeTag != null || publicInstanceForEdit.nativeTag != null)
+                  ) {
+                    g.__bloomInspectorLastPublicInstance = publicInstanceForEdit;
+                  } else {
+                    var instanceForEdit = viewData.closestInstance || viewData.inspected || null;
+                    if (instanceForEdit && typeof instanceForEdit.setNativeProps === 'function') {
+                      g.__bloomInspectorLastPublicInstance = instanceForEdit;
+                    } else if (
+                      instanceForEdit &&
+                      (instanceForEdit._nativeTag != null || instanceForEdit.nativeTag != null)
+                    ) {
+                      g.__bloomInspectorLastPublicInstance = instanceForEdit;
+                    } else if (
+                      instanceForEdit &&
+                      instanceForEdit.stateNode &&
+                      typeof instanceForEdit.stateNode.setNativeProps === 'function'
+                    ) {
+                      g.__bloomInspectorLastPublicInstance = instanceForEdit.stateNode;
+                    } else if (
+                      instanceForEdit &&
+                      instanceForEdit.stateNode &&
+                      (instanceForEdit.stateNode._nativeTag != null ||
+                        instanceForEdit.stateNode.nativeTag != null)
+                    ) {
+                      g.__bloomInspectorLastPublicInstance = instanceForEdit.stateNode;
+                    }
+                  }
                   var rawStack = viewData.componentStack;
                   var fiberFromViewData = getFiberFromViewData(viewData);
                   if (fiberFromViewData) {
@@ -1312,6 +1422,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
                         viewData.source = bestSource;
                       }
                     }
+                    viewData.ownerSource = pickOwnerSource(candidateSources);
                     if (fiberHierarchy.length) {
                       viewData.hierarchy = fiberHierarchy;
                       viewData.selectedIndex = fiberHierarchy.length - 1;
@@ -1471,6 +1582,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
               selectedIndex: hierarchy.length ? hierarchy.length - 1 : 0,
               props: fiber.memoizedProps,
               source: bestSource,
+              ownerSource: pickOwnerSource(candidateSources),
               componentStack: stackNames.length ? stackNames.join(' > ') : undefined,
               frame: payload.frame || null,
             };
@@ -1641,6 +1753,9 @@ static void EXBloomInspectorSwizzleHostStart(void)
 @interface EXBloomInspectorOverlayView : UIView
 @property (nonatomic, strong) UIView *highlightView;
 @property (nonatomic, strong) UILabel *label;
+@property (nonatomic, strong, nullable) NSNumber *selectedViewTag;
+@property (nonatomic, strong, nullable) NSArray<NSNumber *> *selectedViewTags;
+@property (nonatomic, weak, nullable) UIView *selectedHitView;
 - (void)resetSelection;
 @end
 
@@ -1716,6 +1831,7 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
     BLOOM_LOG(@"Bloom Log: 11 missing rootView/window");
     _highlightView.hidden = YES;
     _label.hidden = YES;
+    _selectedViewTag = nil;
     return;
   }
 
@@ -1727,31 +1843,48 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
     BLOOM_LOG(@"Bloom Log: 12 hitTest returned nil");
     _highlightView.hidden = YES;
     _label.hidden = YES;
+    _selectedViewTag = nil;
     return;
   }
   BLOOM_LOG(@"Bloom Log: 13 hitView=%@", NSStringFromClass([hitView class]));
+  _selectedHitView = hitView;
 
   EXBloomInspector *inspectorModule = EXGetBloomInspectorModuleForVisibleApp();
   if (inspectorModule) {
     NSNumber *viewTag = nil;
     UIView *taggedView = hitView;
+    NSMutableArray<NSNumber *> *tags = [NSMutableArray array];
+    NSUInteger tagDepth = 0;
     while (taggedView) {
-      if ([taggedView respondsToSelector:@selector(reactTag)]) {
-        viewTag = taggedView.reactTag;
-        if (viewTag) {
-          break;
+      NSNumber *candidateTag = taggedView.reactTag;
+      if (!candidateTag && taggedView.tag > 0) {
+        candidateTag = @(taggedView.tag);
+      }
+      if (candidateTag) {
+        if (!viewTag) {
+          viewTag = candidateTag;
+        }
+        if (![tags containsObject:candidateTag]) {
+          [tags addObject:candidateTag];
         }
       }
       taggedView = taggedView.superview;
+      tagDepth += 1;
+      if (tagDepth > 20) {
+        break;
+      }
     }
+    _selectedViewTags = tags.count ? [tags copy] : nil;
     NSNumber *rootTag = nil;
     if ([rootView respondsToSelector:@selector(reactTag)]) {
       rootTag = rootView.reactTag;
     }
     if (viewTag) {
       BLOOM_LOG(@"Bloom Log: 14 emitTap viewTag=%@", viewTag);
+      _selectedViewTag = viewTag;
     } else {
       BLOOM_LOG(@"Bloom Log: 14 emitTap viewTag=<nil>");
+      _selectedViewTag = nil;
     }
     NSMutableDictionary *payload = [@{
       @"x": @(pointInRootWindow.x),
@@ -1985,6 +2118,9 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
   _highlightView.hidden = YES;
   _label.hidden = YES;
   _highlightView.frame = CGRectZero;
+  _selectedViewTag = nil;
+  _selectedViewTags = nil;
+  _selectedHitView = nil;
 }
 
 @end
@@ -2269,6 +2405,616 @@ RCT_REMAP_METHOD(getEnabledAsync,
                  rejecter:(RCTPromiseRejectBlock)reject)
 {
   resolve(@([EXBloomInspectorOverlayManager sharedInstance].isVisible));
+}
+
+RCT_REMAP_METHOD(getLiveEditTargetInfoAsync,
+                 getLiveEditTargetInfoWithResolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject)
+{
+  EXKernelAppRecord *visibleApp = [EXKernel sharedInstance].visibleApp;
+  id host = visibleApp.appManager.reactHost;
+  if (!host || ![host respondsToSelector:@selector(moduleRegistry)]) {
+    resolve(@{@"hasTarget": @NO, @"reason": @"no-host"});
+    return;
+  }
+  EXBloomInspectorOverlayView *overlayView =
+      [[EXBloomInspectorOverlayManager sharedInstance] viewController].overlayView;
+  NSArray<NSNumber *> *availableTags = overlayView.selectedViewTags ?: @[];
+  NSNumber *reactTag = overlayView.selectedViewTag ?: (availableTags.count ? availableTags[0] : nil);
+  if (!reactTag) {
+    UIView *hitView = overlayView.selectedHitView;
+    if (hitView) {
+      resolve(@{
+        @"hasTarget": @YES,
+        @"reason": @"no-reactTag-uikit",
+        @"mode": @"uikit",
+        @"availableTags": availableTags,
+        @"componentViewClass": NSStringFromClass([hitView class]),
+      });
+    } else {
+      resolve(@{@"hasTarget": @NO, @"reason": @"no-reactTag", @"availableTags": availableTags});
+    }
+    return;
+  }
+  id moduleRegistry = [host moduleRegistry];
+  RCTUIManager *uiManager = [moduleRegistry moduleForName:"UIManager"];
+  if (!uiManager) {
+    uiManager = [moduleRegistry moduleForName:"RCTUIManager"];
+  }
+  if (!uiManager) {
+    resolve(@{
+      @"hasTarget": @YES,
+      @"reactTag": reactTag,
+      @"reason": @"no-uiManager",
+      @"availableTags": availableTags,
+    });
+    return;
+  }
+
+  // RCTUIManager asserts if `viewNameForReactTag:` is called off the UIManager queue.
+  dispatch_queue_t uiQueue = [uiManager methodQueue];
+  if (!uiQueue) {
+    resolve(@{
+      @"hasTarget": @YES,
+      @"reactTag": reactTag,
+      @"reason": @"no-uiManager-queue",
+      @"availableTags": availableTags,
+    });
+    return;
+  }
+  dispatch_async(uiQueue, ^{
+    NSString *viewName = nil;
+    if ([uiManager respondsToSelector:@selector(viewNameForReactTag:)]) {
+      viewName = [uiManager viewNameForReactTag:reactTag];
+    }
+    BOOL hasSurfacePresenter = NO;
+    @try {
+      id presenter = [host valueForKey:@"surfacePresenter"];
+      hasSurfacePresenter =
+          presenter && [presenter respondsToSelector:@selector(synchronouslyUpdateViewOnUIThread:props:)];
+    } @catch (__unused NSException *exception) {
+      hasSurfacePresenter = NO;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      BOOL fabricViewExists = NO;
+      NSString *fabricViewClass = nil;
+      NSDictionary *fabricViewFrame = nil;
+      NSDictionary *fabricViewBounds = nil;
+      NSNumber *fabricViewAlpha = nil;
+      NSNumber *fabricViewHidden = nil;
+      id fabricViewBackground = [NSNull null];
+      if (hasSurfacePresenter) {
+        @try {
+          id presenter = [host valueForKey:@"surfacePresenter"];
+          if (presenter &&
+              [presenter respondsToSelector:@selector(findComponentViewWithTag_DO_NOT_USE_DEPRECATED:)]) {
+            UIView *view = [(RCTSurfacePresenter *)presenter
+                findComponentViewWithTag_DO_NOT_USE_DEPRECATED:reactTag.integerValue];
+            fabricViewExists = (view != nil);
+            fabricViewClass = view ? NSStringFromClass([view class]) : nil;
+            if (view) {
+              fabricViewFrame = EXBloomInspectorRectInfo(view.frame);
+              fabricViewBounds = EXBloomInspectorRectInfo(view.bounds);
+              fabricViewAlpha = @(view.alpha);
+              fabricViewHidden = @(view.hidden);
+              fabricViewBackground = EXBloomInspectorColorToString(view.backgroundColor) ?: [NSNull null];
+            }
+          }
+        } @catch (__unused NSException *exception) {
+          fabricViewExists = NO;
+        }
+      }
+
+      if (viewName) {
+        resolve(@{
+          @"hasTarget": @YES,
+          @"reactTag": reactTag,
+          @"viewName": viewName,
+          @"mode": @"native",
+          @"availableTags": availableTags,
+        });
+      } else {
+        resolve(@{
+          @"hasTarget": @YES,
+          @"reactTag": reactTag,
+          @"mode": hasSurfacePresenter ? @"fabric" : @"native",
+          @"reason": hasSurfacePresenter
+              ? (fabricViewExists ? @"viewName-missing-fallback-fabric" : @"fabric-view-missing")
+              : @"viewName-missing",
+          @"componentViewClass": fabricViewClass ?: [NSNull null],
+          @"componentViewFrame": fabricViewFrame ?: [NSNull null],
+          @"componentViewBounds": fabricViewBounds ?: [NSNull null],
+          @"componentViewHidden": fabricViewHidden ?: [NSNull null],
+          @"componentViewAlpha": fabricViewAlpha ?: [NSNull null],
+          @"componentViewBackgroundColor": fabricViewBackground ?: [NSNull null],
+          @"availableTags": availableTags,
+        });
+      }
+    });
+  });
+}
+
+static void EXBloomInspectorApplyNativePropsToReactTag(
+    id host,
+    NSNumber *reactTag,
+    NSDictionary *props,
+    RCTPromiseResolveBlock resolve)
+{
+  if (!host || ![host respondsToSelector:@selector(moduleRegistry)] || !reactTag) {
+    resolve(@{@"ok": @NO, @"reason": @"invalid-args"});
+    return;
+  }
+
+  BOOL forceUIKit = NO;
+  NSDictionary *effectiveProps = props;
+  id forceUIKitValue = props[@"__bloomInspectorForceUIKit"];
+  if ([forceUIKitValue respondsToSelector:@selector(boolValue)]) {
+    forceUIKit = [forceUIKitValue boolValue];
+  }
+  if (forceUIKit) {
+    NSMutableDictionary *mutableProps = [props mutableCopy];
+    [mutableProps removeObjectForKey:@"__bloomInspectorForceUIKit"];
+    effectiveProps = [mutableProps copy];
+    @try {
+      id presenter = [host valueForKey:@"surfacePresenter"];
+      if (presenter &&
+          [presenter respondsToSelector:@selector(findComponentViewWithTag_DO_NOT_USE_DEPRECATED:)]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          UIView *view = [(RCTSurfacePresenter *)presenter
+              findComponentViewWithTag_DO_NOT_USE_DEPRECATED:reactTag.integerValue];
+          if (view) {
+            EXBloomInspectorApplyUIKitStyleToView(view, effectiveProps, resolve);
+          } else {
+            resolve(@{
+              @"ok": @NO,
+              @"mode": @"uikit",
+              @"reason": @"forceUIKit-no-view",
+              @"reactTag": reactTag,
+            });
+          }
+        });
+        return;
+      }
+    } @catch (__unused NSException *exception) {
+      // ignore
+    }
+  }
+
+  // Fabric path (no viewName needed): `RCTSurfacePresenter synchronouslyUpdateViewOnUIThread:props:`
+  @try {
+    id presenter = [host valueForKey:@"surfacePresenter"];
+    if (presenter && [presenter respondsToSelector:@selector(synchronouslyUpdateViewOnUIThread:props:)]) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        UIView *view = nil;
+        if ([presenter respondsToSelector:@selector(findComponentViewWithTag_DO_NOT_USE_DEPRECATED:)]) {
+          view = [(RCTSurfacePresenter *)presenter
+              findComponentViewWithTag_DO_NOT_USE_DEPRECATED:reactTag.integerValue];
+        }
+        if (!view) {
+          resolve(@{
+            @"ok": @NO,
+            @"reactTag": reactTag,
+            @"mode": @"fabric",
+            @"reason": @"fabric-view-missing",
+          });
+          return;
+        }
+        [(RCTSurfacePresenter *)presenter synchronouslyUpdateViewOnUIThread:reactTag
+                                                                     props:effectiveProps];
+        resolve(@{
+          @"ok": @YES,
+          @"reactTag": reactTag,
+          @"mode": @"fabric",
+          @"componentViewClass": NSStringFromClass([view class]),
+          @"componentViewFrame": EXBloomInspectorRectInfo(view.frame),
+          @"componentViewBounds": EXBloomInspectorRectInfo(view.bounds),
+          @"componentViewHidden": @(view.hidden),
+          @"componentViewAlpha": @(view.alpha),
+          @"componentViewBackgroundColor": EXBloomInspectorColorToString(view.backgroundColor) ?: [NSNull null],
+        });
+      });
+      return;
+    }
+  } @catch (__unused NSException *exception) {
+    // ignore
+  }
+
+  id moduleRegistry = [host moduleRegistry];
+  RCTUIManager *uiManager = [moduleRegistry moduleForName:"UIManager"];
+  if (!uiManager) {
+    uiManager = [moduleRegistry moduleForName:"RCTUIManager"];
+  }
+  if (!uiManager) {
+    resolve(@{@"ok": @NO, @"reason": @"no-uiManager", @"reactTag": reactTag});
+    return;
+  }
+
+  dispatch_queue_t uiQueue = [uiManager methodQueue];
+  if (!uiQueue) {
+    resolve(@{@"ok": @NO, @"reason": @"no-uiManager-queue", @"reactTag": reactTag});
+    return;
+  }
+
+  dispatch_async(uiQueue, ^{
+    if (forceUIKit && [uiManager respondsToSelector:@selector(viewForReactTag:)]) {
+      UIView *view = [uiManager viewForReactTag:reactTag];
+      dispatch_async(dispatch_get_main_queue(), ^{
+        if (view) {
+          EXBloomInspectorApplyUIKitStyleToView(view, effectiveProps, resolve);
+        } else {
+          resolve(@{
+            @"ok": @NO,
+            @"mode": @"uikit",
+            @"reason": @"forceUIKit-no-view",
+            @"reactTag": reactTag,
+          });
+        }
+      });
+      return;
+    }
+    if (![uiManager respondsToSelector:@selector(viewNameForReactTag:)] ||
+        ![uiManager respondsToSelector:@selector(synchronouslyUpdateViewOnUIThread:viewName:props:)]) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        resolve(@{@"ok": @NO, @"reason": @"missing-selectors", @"reactTag": reactTag});
+      });
+      return;
+    }
+
+    NSString *viewName = [uiManager viewNameForReactTag:reactTag];
+    if (!viewName) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        resolve(@{@"ok": @NO, @"reason": @"viewName-missing", @"reactTag": reactTag});
+      });
+      return;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [uiManager synchronouslyUpdateViewOnUIThread:reactTag viewName:viewName props:effectiveProps];
+      resolve(@{@"ok": @YES, @"reactTag": reactTag, @"viewName": viewName, @"mode": @"native"});
+    });
+  });
+}
+
+static UIColor *EXBloomInspectorColorFromString(NSString *value)
+{
+  if (!value || ![value isKindOfClass:[NSString class]]) {
+    return nil;
+  }
+  NSString *lower = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]].lowercaseString;
+  if ([lower hasPrefix:@"#"]) {
+    NSString *hex = [lower substringFromIndex:1];
+    unsigned int a = 255, r = 0, g = 0, b = 0;
+    if (hex.length == 6) {
+      NSScanner *scanner = [NSScanner scannerWithString:hex];
+      unsigned int rgb = 0;
+      if (![scanner scanHexInt:&rgb]) {
+        return nil;
+      }
+      r = (rgb >> 16) & 0xFF;
+      g = (rgb >> 8) & 0xFF;
+      b = rgb & 0xFF;
+    } else if (hex.length == 8) {
+      NSScanner *scanner = [NSScanner scannerWithString:hex];
+      unsigned int argb = 0;
+      if (![scanner scanHexInt:&argb]) {
+        return nil;
+      }
+      a = (argb >> 24) & 0xFF;
+      r = (argb >> 16) & 0xFF;
+      g = (argb >> 8) & 0xFF;
+      b = argb & 0xFF;
+    } else {
+      return nil;
+    }
+    return [UIColor colorWithRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:a / 255.0];
+  }
+  if ([lower isEqualToString:@"red"]) return UIColor.redColor;
+  if ([lower isEqualToString:@"green"]) return UIColor.greenColor;
+  if ([lower isEqualToString:@"blue"]) return UIColor.blueColor;
+  if ([lower isEqualToString:@"black"]) return UIColor.blackColor;
+  if ([lower isEqualToString:@"white"]) return UIColor.whiteColor;
+  if ([lower isEqualToString:@"gray"] || [lower isEqualToString:@"grey"]) return UIColor.grayColor;
+  if ([lower isEqualToString:@"clear"] || [lower isEqualToString:@"transparent"]) return UIColor.clearColor;
+  return nil;
+}
+
+static NSTextAlignment EXBloomInspectorTextAlignmentFromString(NSString *value)
+{
+  if (!value || ![value isKindOfClass:[NSString class]]) {
+    return NSTextAlignmentNatural;
+  }
+  NSString *lower = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]].lowercaseString;
+  if ([lower isEqualToString:@"left"]) return NSTextAlignmentLeft;
+  if ([lower isEqualToString:@"right"]) return NSTextAlignmentRight;
+  if ([lower isEqualToString:@"center"]) return NSTextAlignmentCenter;
+  if ([lower isEqualToString:@"justify"]) return NSTextAlignmentJustified;
+  return NSTextAlignmentNatural;
+}
+
+static NSString *EXBloomInspectorColorToString(UIColor *color)
+{
+  if (!color) {
+    return nil;
+  }
+  CGFloat r = 0, g = 0, b = 0, a = 0;
+  if (![color getRed:&r green:&g blue:&b alpha:&a]) {
+    return [color description];
+  }
+  return [NSString stringWithFormat:@"rgba(%d,%d,%d,%.3f)",
+          (int)roundf(r * 255.0f),
+          (int)roundf(g * 255.0f),
+          (int)roundf(b * 255.0f),
+          a];
+}
+
+static NSDictionary *EXBloomInspectorRectInfo(CGRect rect)
+{
+  return @{
+    @"x": @(rect.origin.x),
+    @"y": @(rect.origin.y),
+    @"width": @(rect.size.width),
+    @"height": @(rect.size.height),
+  };
+}
+
+static UIView *EXBloomInspectorFindTextView(UIView *view)
+{
+  if (!view) {
+    return nil;
+  }
+  if ([view isKindOfClass:[UILabel class]] ||
+      [view isKindOfClass:[UITextView class]] ||
+      [view isKindOfClass:[UITextField class]]) {
+    return view;
+  }
+  for (UIView *subview in view.subviews) {
+    UIView *match = EXBloomInspectorFindTextView(subview);
+    if (match) {
+      return match;
+    }
+  }
+  return nil;
+}
+
+static void EXBloomInspectorApplyTextStyleToView(UIView *view, NSDictionary *style)
+{
+  if (!view || ![style isKindOfClass:[NSDictionary class]]) {
+    return;
+  }
+  UIView *textView = EXBloomInspectorFindTextView(view);
+  if (!textView) {
+    return;
+  }
+  UIColor *textColor = nil;
+  id colorValue = style[@"color"];
+  if ([colorValue isKindOfClass:[NSString class]]) {
+    textColor = EXBloomInspectorColorFromString(colorValue);
+  }
+  if (textColor && [textView respondsToSelector:@selector(setTextColor:)]) {
+    [(id)textView setTextColor:textColor];
+  }
+  NSString *textAlign = [style[@"textAlign"] isKindOfClass:[NSString class]] ? style[@"textAlign"] : nil;
+  if (textAlign && [textView respondsToSelector:@selector(setTextAlignment:)]) {
+    [(id)textView setTextAlignment:EXBloomInspectorTextAlignmentFromString(textAlign)];
+  }
+  NSNumber *fontSize = [style[@"fontSize"] isKindOfClass:[NSNumber class]] ? style[@"fontSize"] : nil;
+  if (fontSize) {
+    UIFont *font = nil;
+    id fontValue = nil;
+    @try {
+      fontValue = [textView valueForKey:@"font"];
+    } @catch (__unused NSException *exception) {
+      fontValue = nil;
+    }
+    if ([fontValue isKindOfClass:[UIFont class]]) {
+      font = (UIFont *)fontValue;
+    }
+    CGFloat size = [fontSize floatValue];
+    if (size > 0) {
+      UIFont *nextFont = font ? [font fontWithSize:size] : [UIFont systemFontOfSize:size];
+      if ([textView respondsToSelector:@selector(setFont:)]) {
+        [(id)textView setFont:nextFont];
+      }
+    }
+  }
+  NSString *decoration = [style[@"textDecorationLine"] isKindOfClass:[NSString class]]
+                             ? style[@"textDecorationLine"]
+                             : nil;
+  if (decoration && [decoration containsString:@"underline"]) {
+    UIColor *underlineColor = nil;
+    id underlineValue = style[@"textDecorationColor"];
+    if ([underlineValue isKindOfClass:[NSString class]]) {
+      underlineColor = EXBloomInspectorColorFromString(underlineValue);
+    }
+    NSAttributedString *existing = nil;
+    if ([textView respondsToSelector:@selector(attributedText)]) {
+      existing = [(id)textView attributedText];
+    }
+    NSString *text = nil;
+    if (!existing && [textView respondsToSelector:@selector(text)]) {
+      text = [(id)textView text];
+    }
+    if (!existing && !text) {
+      return;
+    }
+    NSMutableAttributedString *mutableText =
+        existing ? [existing mutableCopy] : [[NSMutableAttributedString alloc] initWithString:text ?: @""];
+    NSRange range = NSMakeRange(0, mutableText.length);
+    if (range.length > 0) {
+      [mutableText addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
+      if (underlineColor) {
+        [mutableText addAttribute:NSUnderlineColorAttributeName value:underlineColor range:range];
+      }
+      if (textColor) {
+        [mutableText addAttribute:NSForegroundColorAttributeName value:textColor range:range];
+      }
+    }
+    if ([textView respondsToSelector:@selector(setAttributedText:)]) {
+      [(id)textView setAttributedText:mutableText];
+    }
+  }
+}
+
+static void EXBloomInspectorApplyUIKitStyleToView(UIView *view, NSDictionary *props, RCTPromiseResolveBlock resolve)
+{
+  if (!view) {
+    resolve(@{@"ok": @NO, @"reason": @"no-hitView", @"mode": @"uikit"});
+    return;
+  }
+
+  NSDictionary *style = props[@"style"];
+  if (![style isKindOfClass:[NSDictionary class]]) {
+    style = props;
+  }
+  if (![style isKindOfClass:[NSDictionary class]] || style.count == 0) {
+    resolve(@{@"ok": @NO, @"reason": @"empty-style", @"mode": @"uikit"});
+    return;
+  }
+
+  id bg = style[@"backgroundColor"];
+  if ([bg isKindOfClass:[NSString class]]) {
+    UIColor *color = EXBloomInspectorColorFromString(bg);
+    if (color) {
+      view.backgroundColor = color;
+      view.layer.backgroundColor = color.CGColor;
+      view.opaque = YES;
+      UIView *contentView = nil;
+      if ([view respondsToSelector:@selector(contentView)]) {
+        @try {
+          contentView = [view valueForKey:@"contentView"];
+        } @catch (__unused NSException *exception) {
+          contentView = nil;
+        }
+      }
+      if ([contentView isKindOfClass:[UIView class]]) {
+        contentView.backgroundColor = color;
+        contentView.layer.backgroundColor = color.CGColor;
+        contentView.opaque = YES;
+      } else if ([NSStringFromClass([view class]) containsString:@"Paragraph"]) {
+        UIView *firstSubview = view.subviews.count ? view.subviews.firstObject : nil;
+        if ([firstSubview isKindOfClass:[UIView class]]) {
+          firstSubview.backgroundColor = color;
+          firstSubview.layer.backgroundColor = color.CGColor;
+          firstSubview.opaque = YES;
+        }
+      }
+    }
+  }
+  id opacity = style[@"opacity"];
+  if ([opacity isKindOfClass:[NSNumber class]]) {
+    view.alpha = [(NSNumber *)opacity floatValue];
+  }
+  id hidden = style[@"display"];
+  if ([hidden isKindOfClass:[NSString class]] && [hidden isEqualToString:@"none"]) {
+    view.hidden = YES;
+  }
+  id borderColor = style[@"borderColor"];
+  if ([borderColor isKindOfClass:[NSString class]]) {
+    UIColor *color = EXBloomInspectorColorFromString(borderColor);
+    if (color) {
+      view.layer.borderColor = color.CGColor;
+    }
+  }
+  id borderWidth = style[@"borderWidth"];
+  if ([borderWidth isKindOfClass:[NSNumber class]]) {
+    view.layer.borderWidth = [(NSNumber *)borderWidth floatValue];
+  }
+  id borderRadius = style[@"borderRadius"];
+  if ([borderRadius isKindOfClass:[NSNumber class]]) {
+    view.layer.cornerRadius = [(NSNumber *)borderRadius floatValue];
+    view.layer.masksToBounds = YES;
+  }
+  EXBloomInspectorApplyTextStyleToView(view, style);
+  id tint = style[@"tintColor"];
+  if ([tint isKindOfClass:[NSString class]]) {
+    UIColor *color = EXBloomInspectorColorFromString(tint);
+    if (color) {
+      view.tintColor = color;
+    }
+  }
+  id textColor = style[@"color"];
+  if ([textColor isKindOfClass:[NSString class]]) {
+    UIColor *color = EXBloomInspectorColorFromString(textColor);
+    if (color) {
+      if ([view isKindOfClass:[UILabel class]]) {
+        ((UILabel *)view).textColor = color;
+      } else if ([view isKindOfClass:[UITextView class]]) {
+        ((UITextView *)view).textColor = color;
+      } else if ([view isKindOfClass:[UITextField class]]) {
+        ((UITextField *)view).textColor = color;
+      } else if ([view isKindOfClass:[UIButton class]]) {
+        [(UIButton *)view setTitleColor:color forState:UIControlStateNormal];
+      }
+    }
+  }
+
+  resolve(@{
+    @"ok": @YES,
+    @"mode": @"uikit",
+    @"componentViewClass": NSStringFromClass([view class]),
+    @"componentViewFrame": EXBloomInspectorRectInfo(view.frame),
+    @"componentViewBounds": EXBloomInspectorRectInfo(view.bounds),
+    @"componentViewHidden": @(view.hidden),
+    @"componentViewAlpha": @(view.alpha),
+    @"componentViewBackgroundColor": EXBloomInspectorColorToString(view.backgroundColor) ?: [NSNull null],
+  });
+}
+
+RCT_REMAP_METHOD(applyNativePropsAsync,
+                 applyNativeProps:(NSDictionary *)props
+                 withResolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject)
+{
+  if (!props || props.count == 0) {
+    resolve(@{@"ok": @NO, @"reason": @"empty-props"});
+    return;
+  }
+
+  EXKernelAppRecord *visibleApp = [EXKernel sharedInstance].visibleApp;
+  id host = visibleApp.appManager.reactHost;
+  if (!host || ![host respondsToSelector:@selector(moduleRegistry)]) {
+    resolve(@{@"ok": @NO, @"reason": @"no-host"});
+    return;
+  }
+
+  EXBloomInspectorOverlayView *overlayView =
+      [[EXBloomInspectorOverlayManager sharedInstance] viewController].overlayView;
+  NSArray<NSNumber *> *availableTags = overlayView.selectedViewTags ?: @[];
+  NSNumber *reactTag = overlayView.selectedViewTag ?: (availableTags.count ? availableTags[0] : nil);
+  if (!reactTag) {
+    EXBloomInspectorApplyUIKitStyleToView(overlayView.selectedHitView, props, resolve);
+    return;
+  }
+
+  EXBloomInspectorApplyNativePropsToReactTag(host, reactTag, props, resolve);
+}
+
+RCT_REMAP_METHOD(applyNativePropsToTagAsync,
+                 applyNativePropsToTag:(NSNumber *)reactTag
+                 props:(NSDictionary *)props
+                 withResolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject)
+{
+  if (!props || props.count == 0) {
+    resolve(@{@"ok": @NO, @"reason": @"empty-props"});
+    return;
+  }
+
+  EXKernelAppRecord *visibleApp = [EXKernel sharedInstance].visibleApp;
+  id host = visibleApp.appManager.reactHost;
+  if (!host) {
+    resolve(@{@"ok": @NO, @"reason": @"no-host"});
+    return;
+  }
+
+  if (!reactTag) {
+    EXBloomInspectorOverlayView *overlayView =
+        [[EXBloomInspectorOverlayManager sharedInstance] viewController].overlayView;
+    EXBloomInspectorApplyUIKitStyleToView(overlayView.selectedHitView, props, resolve);
+    return;
+  }
+
+  EXBloomInspectorApplyNativePropsToReactTag(host, reactTag, props, resolve);
 }
 
 RCT_EXPORT_METHOD(sendPick:(NSDictionary *)payload)
