@@ -19,13 +19,15 @@
 #import <string>
 
 static const BOOL kBloomInspectorDebugLogs = NO;
-static const BOOL kBloomInspectorEnableNativeFallback = NO;
+static const BOOL kBloomInspectorEnableNativeFallback = YES;
 #define BLOOM_LOG(...)         \
   do {                         \
     if (kBloomInspectorDebugLogs) { \
       NSLog(__VA_ARGS__);      \
     }                          \
   } while (0)
+
+static UIView *EXBloomInspectorFindTextView(UIView *view);
 
 static const char kBloomInspectorInjectionScript[] = R"JS(
 (function () {
@@ -124,6 +126,29 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
       if (!nextProps || typeof nextProps !== 'object') {
         return false;
       }
+      if (
+        Object.prototype.hasOwnProperty.call(nextProps, 'children') &&
+        (typeof nextProps.children === 'string' || typeof nextProps.children === 'number')
+      ) {
+        var textValue = String(nextProps.children);
+        var textProps = {};
+        for (var key in nextProps) {
+          if (!Object.prototype.hasOwnProperty.call(nextProps, key) || key === 'children') {
+            continue;
+          }
+          textProps[key] = nextProps[key];
+        }
+        try {
+          textProps.text = textValue;
+          target.setNativeProps(textProps);
+          return true;
+        } catch (e) {}
+        try {
+          textProps.children = textValue;
+          target.setNativeProps(textProps);
+          return true;
+        } catch (e) {}
+      }
       target.setNativeProps(nextProps);
       return true;
     } catch (e) {
@@ -157,6 +182,17 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
     if (targetHook.renderers && typeof targetHook.renderers.set === 'function') {
       var originalSet = targetHook.renderers.set.bind(targetHook.renderers);
       targetHook.renderers.set = function (id, renderer) {
+        if (targetHook.__bloomInspectorDummyRenderer) {
+          try {
+            if (typeof targetHook.renderers.delete === 'function') {
+              targetHook.renderers.delete('__bloomInspectorDummy');
+            } else if (typeof targetHook.renderers === 'object') {
+              delete targetHook.renderers.__bloomInspectorDummy;
+            }
+          } catch (e) {}
+          targetHook.__bloomInspectorDummyRenderer = null;
+          log('70 devtools hook dummy renderer cleared');
+        }
         g.__bloomInspectorRenderers.push(renderer);
         return originalSet(id, renderer);
       };
@@ -165,6 +201,17 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
       var originalInject = targetHook.inject.bind(targetHook);
       targetHook.inject = function (renderer) {
         var id = originalInject(renderer);
+        if (targetHook.__bloomInspectorDummyRenderer) {
+          try {
+            if (targetHook.renderers && typeof targetHook.renderers.delete === 'function') {
+              targetHook.renderers.delete('__bloomInspectorDummy');
+            } else if (targetHook.renderers && typeof targetHook.renderers === 'object') {
+              delete targetHook.renderers.__bloomInspectorDummy;
+            }
+          } catch (e) {}
+          targetHook.__bloomInspectorDummyRenderer = null;
+          log('70 devtools hook dummy renderer cleared');
+        }
         g.__bloomInspectorRenderers.push(renderer);
         return id;
       };
@@ -173,52 +220,53 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
 
   function ensureHook() {
     var hook = g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-    if (!hook || !hook.renderers) {
-      hook = (function () {
-        var renderers = new Map();
-        var listeners = {};
-        var nextRendererId = 1;
-        function emit(event, payload) {
-          var handlers = listeners[event];
-          if (!handlers) {
-            return;
-          }
-          handlers.forEach(function (handler) {
-            try {
-              handler(payload);
-            } catch (e) {}
-          });
+    if (!hook) {
+      return null;
+    }
+    if (!hook.renderers) {
+      try {
+        hook.renderers = new Map();
+        log('70 devtools hook patched renderers');
+      } catch (e) {}
+    }
+    if (!hook.__bloomInspectorListeners) {
+      hook.__bloomInspectorListeners = {};
+    }
+    if (typeof hook.on !== 'function') {
+      hook.on = function (event, handler) {
+        var listeners = hook.__bloomInspectorListeners;
+        if (!listeners[event]) {
+          listeners[event] = [];
         }
-        return {
-          supportsFiber: true,
-          renderers: renderers,
-          inject: function (renderer) {
-            var id = renderer && (renderer.id || renderer.rendererID) || nextRendererId++;
-            renderers.set(id, renderer);
-            emit('renderer', { id: id, renderer: renderer });
-            return id;
-          },
-          on: function (event, handler) {
-            if (!listeners[event]) {
-              listeners[event] = [];
-            }
-            listeners[event].push(handler);
-          },
-          off: function (event, handler) {
-            var handlers = listeners[event];
-            if (!handlers) {
-              return;
-            }
-            var index = handlers.indexOf(handler);
-            if (index >= 0) {
-              handlers.splice(index, 1);
-            }
-          },
-          emit: emit,
-        };
-      })();
-      g.__REACT_DEVTOOLS_GLOBAL_HOOK__ = hook;
-      log('70 devtools hook installed');
+        listeners[event].push(handler);
+      };
+    }
+    if (typeof hook.off !== 'function') {
+      hook.off = function (event, handler) {
+        var listeners = hook.__bloomInspectorListeners;
+        var handlers = listeners[event];
+        if (!handlers) {
+          return;
+        }
+        var index = handlers.indexOf(handler);
+        if (index >= 0) {
+          handlers.splice(index, 1);
+        }
+      };
+    }
+    if (typeof hook.emit !== 'function') {
+      hook.emit = function (event, payload) {
+        var listeners = hook.__bloomInspectorListeners;
+        var handlers = listeners[event];
+        if (!handlers) {
+          return;
+        }
+        handlers.forEach(function (handler) {
+          try {
+            handler(payload);
+          } catch (e) {}
+        });
+      };
     }
     observeHook(hook, 'runtime');
     return hook;
@@ -235,7 +283,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
     })();
   }
 
-  function sendPayload(data, touchID) {
+  function sendPayload(data, touchID, viewTagValue) {
     function sanitize(value, depth) {
       if (depth > 3) {
         return '[MaxDepth]';
@@ -278,11 +326,13 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
       var normalizedStack = normalizeStackParts(detailData && detailData.componentStack
         ? detailData.componentStack
         : data.componentStack);
-      var payloadToSend = {
-        frame: data.frame,
-        hierarchy: hierarchy.map(function (item) {
-          return { name: item && item.name ? item.name : 'Anonymous' };
-        }),
+        var resolvedViewTag = data.viewTag != null ? data.viewTag : viewTagValue;
+        var payloadToSend = {
+          frame: data.frame,
+          viewTag: resolvedViewTag != null ? resolvedViewTag : undefined,
+          hierarchy: hierarchy.map(function (item) {
+            return { name: item && item.name ? item.name : 'Anonymous' };
+          }),
         props: undefined,
         selectedIndex: selectedIndex,
         source: undefined,
@@ -1058,6 +1108,130 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
     return foundId;
   }
 
+  function findDevtoolsModuleId(matchers) {
+    var r = g.__r;
+    if (!r || typeof r !== 'function' || !r.getModules || typeof r.getModules !== 'function') {
+      return null;
+    }
+    var modules = r.getModules();
+    if (!modules) {
+      return null;
+    }
+    var foundId = null;
+    function matchesName(name) {
+      if (!name) {
+        return false;
+      }
+      for (var i = 0; i < matchers.length; i++) {
+        if (name.indexOf(matchers[i]) !== -1) {
+          return true;
+        }
+      }
+      return false;
+    }
+    if (typeof modules.forEach === 'function') {
+      modules.forEach(function (value, key) {
+        if (foundId != null || !value || !value.verboseName) {
+          return;
+        }
+        if (matchesName(value.verboseName)) {
+          foundId = key;
+        }
+      });
+    } else if (typeof modules === 'object') {
+      for (var key in modules) {
+        if (foundId != null) {
+          break;
+        }
+        var value = modules[key];
+        if (!value || !value.verboseName) {
+          continue;
+        }
+        if (matchesName(value.verboseName)) {
+          foundId = key;
+          break;
+        }
+      }
+    }
+    return foundId;
+  }
+
+  function bootstrapDevtoolsBackend(requireFn, hook, force) {
+    if (!requireFn || !hook) {
+      return false;
+    }
+    var state = g.__bloomInspectorDevtoolsBootstrap;
+    if (!state || typeof state !== 'object') {
+      state = { attempts: 0, lastAttempt: 0, success: false };
+      g.__bloomInspectorDevtoolsBootstrap = state;
+    }
+    if (state.success) {
+      return true;
+    }
+    var now = g.Date && typeof g.Date.now === 'function' ? g.Date.now() : 0;
+    if (!force && state.attempts >= 5 && now && state.lastAttempt && now - state.lastAttempt < 2000) {
+      return false;
+    }
+    state.attempts += 1;
+    state.lastAttempt = now;
+    try {
+      if (hook.rendererInterfaces && hook.rendererInterfaces.size) {
+        state.success = true;
+        return true;
+      }
+    } catch (e) {}
+    try {
+      if (hook.renderers && hook.renderers.size) {
+        state.success = true;
+        return true;
+      }
+    } catch (e) {}
+    var backendId = findDevtoolsModuleId([
+      'react-devtools-core/backend',
+      'react-devtools-core/backend.js',
+    ]);
+    if (backendId != null) {
+      try {
+        var backend = requireFn(backendId);
+        if (backend && typeof backend.initialize === 'function') {
+          backend.initialize(hook);
+          log('72 devtools backend initialized');
+          state.success = true;
+          return true;
+        }
+      } catch (e) {
+        log('72 devtools backend init failed');
+      }
+    } else if (force) {
+      log('72 devtools backend module missing');
+    }
+    var standaloneId = findDevtoolsModuleId([
+      'react-devtools-core/standalone',
+      'react-devtools-core/standalone.js',
+      'react-devtools-core',
+    ]);
+    if (standaloneId != null) {
+      try {
+        var standalone = requireFn(standaloneId);
+        if (standalone && typeof standalone.connectToDevTools === 'function') {
+          standalone.connectToDevTools({
+            host: 'localhost',
+            port: 8097,
+            resolveRNStyle: hook.resolveRNStyle || undefined,
+          });
+          log('72 devtools standalone connect');
+          state.success = true;
+          return true;
+        }
+      } catch (e) {
+        log('72 devtools standalone failed');
+      }
+    } else if (force) {
+      log('72 devtools standalone module missing');
+    }
+    return false;
+  }
+
   function findReactModuleId() {
     var r = g.__r;
     if (!r || typeof r !== 'function' || !r.getModules || typeof r.getModules !== 'function') {
@@ -1237,6 +1411,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
       log('52 devtools hook missing');
       return false;
     }
+    bootstrapDevtoolsBackend(requireFn, hook, false);
 
     var renderers = Array.from(hook.renderers.values());
     if (!renderers.length && Array.isArray(g.__bloomInspectorRenderers) && g.__bloomInspectorRenderers.length) {
@@ -1252,6 +1427,663 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
     }
 
     var emitter = new RN.NativeEventEmitter(inspectorModule);
+    var fiberByTag = g.__bloomInspectorFiberByTag;
+    if (!fiberByTag) {
+      try {
+        fiberByTag = new Map();
+      } catch (e) {
+        fiberByTag = {};
+      }
+      g.__bloomInspectorFiberByTag = fiberByTag;
+    }
+    var rendererByTag = g.__bloomInspectorRendererByTag;
+    if (!rendererByTag) {
+      try {
+        rendererByTag = new Map();
+      } catch (e) {
+        rendererByTag = {};
+      }
+      g.__bloomInspectorRendererByTag = rendererByTag;
+    }
+
+    function cacheFiberForTag(tag, fiber, source, renderer) {
+      if (tag == null || !fiber) {
+        return;
+      }
+      try {
+        if (fiberByTag && typeof fiberByTag.set === 'function') {
+          fiberByTag.set(tag, fiber);
+        } else {
+          fiberByTag[tag] = fiber;
+        }
+        if (renderer) {
+          if (rendererByTag && typeof rendererByTag.set === 'function') {
+            rendererByTag.set(tag, renderer);
+          } else if (rendererByTag) {
+            rendererByTag[tag] = renderer;
+          }
+        }
+        if (DEBUG_LOGS) {
+          log('live edit cached fiber tag=' + String(tag) + ' source=' + (source || 'unknown'));
+        }
+      } catch (e) {}
+    }
+
+    function getCachedFiber(tag) {
+      if (tag == null) {
+        return null;
+      }
+      try {
+        if (fiberByTag && typeof fiberByTag.get === 'function') {
+          return fiberByTag.get(tag) || null;
+        }
+        return fiberByTag ? fiberByTag[tag] || null : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function getCachedRenderer(tag) {
+      if (tag == null) {
+        return null;
+      }
+      try {
+        if (rendererByTag && typeof rendererByTag.get === 'function') {
+          return rendererByTag.get(tag) || null;
+        }
+        return rendererByTag ? rendererByTag[tag] || null : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function mergeStyles(existing, override) {
+      if (override == null) {
+        return existing;
+      }
+      if (Array.isArray(override)) {
+        if (existing == null) {
+          return override.slice();
+        }
+        if (Array.isArray(existing)) {
+          return existing.concat(override);
+        }
+        return [existing].concat(override);
+      }
+      if (existing == null) {
+        return [override];
+      }
+      if (Array.isArray(existing)) {
+        return existing.concat(override);
+      }
+      return [existing, override];
+    }
+
+    function stripInspectorKeys(rawProps) {
+      if (!rawProps || typeof rawProps !== 'object') {
+        return null;
+      }
+      var cleaned = {};
+      for (var key in rawProps) {
+        if (!Object.prototype.hasOwnProperty.call(rawProps, key)) {
+          continue;
+        }
+        if (
+          key === '__bloomInspectorUseChild' ||
+          key === '__bloomInspectorForceUIKit' ||
+          key === '__bloomInspectorDebug' ||
+          key === 'reactTag' ||
+          key === 'viewTag'
+        ) {
+          continue;
+        }
+        cleaned[key] = rawProps[key];
+      }
+      return cleaned;
+    }
+
+    function buildMergedProps(fiber, nextProps) {
+      if (!fiber || !nextProps || typeof nextProps !== 'object') {
+        return null;
+      }
+      var cleaned = stripInspectorKeys(nextProps);
+      if (!cleaned) {
+        return null;
+      }
+      var currentProps = fiber.memoizedProps || {};
+      var mergedProps = {};
+      for (var key in currentProps) {
+        mergedProps[key] = currentProps[key];
+      }
+      for (var propKey in cleaned) {
+        if (!Object.prototype.hasOwnProperty.call(cleaned, propKey)) {
+          continue;
+        }
+        if (propKey === 'style') {
+          mergedProps.style = mergeStyles(currentProps.style, cleaned.style);
+        } else {
+          mergedProps[propKey] = cleaned[propKey];
+        }
+      }
+      return mergedProps;
+    }
+
+    function applyPropsToFiber(fiber, mergedProps) {
+      if (!fiber || !mergedProps || typeof mergedProps !== 'object') {
+        return false;
+      }
+      fiber.memoizedProps = mergedProps;
+      fiber.pendingProps = mergedProps;
+      return true;
+    }
+
+    function extractTextValue(nextProps) {
+      if (!nextProps || typeof nextProps !== 'object') {
+        return null;
+      }
+      var value = null;
+      if (Object.prototype.hasOwnProperty.call(nextProps, 'children')) {
+        value = nextProps.children;
+      } else if (Object.prototype.hasOwnProperty.call(nextProps, 'text')) {
+        value = nextProps.text;
+      } else if (Object.prototype.hasOwnProperty.call(nextProps, 'value')) {
+        value = nextProps.value;
+      }
+      if (typeof value === 'string' || typeof value === 'number') {
+        return String(value);
+      }
+      return null;
+    }
+
+    function applyTextViaStateNode(fiber, textValue) {
+      if (!fiber || textValue == null) {
+        return false;
+      }
+      var queue = [fiber];
+      var visited = 0;
+      while (queue.length && visited < 40) {
+        var node = queue.shift();
+        if (!node) {
+          visited += 1;
+          continue;
+        }
+        var state = node.stateNode;
+        if (state && typeof state.setNativeProps === 'function') {
+          try {
+            state.setNativeProps({ text: textValue });
+            return true;
+          } catch (e) {}
+          try {
+            state.setNativeProps({ children: textValue });
+            return true;
+          } catch (e) {}
+        }
+        if (node.child) {
+          queue.push(node.child);
+        }
+        if (node.sibling) {
+          queue.push(node.sibling);
+        }
+        visited += 1;
+      }
+      return false;
+    }
+
+    function tryFindFiberForTag(viewTagValue) {
+      if (viewTagValue == null) {
+        return null;
+      }
+      for (var i = 0; i < renderers.length; i++) {
+        var renderer = renderers[i];
+        if (!renderer) {
+          continue;
+        }
+        var found = tryFiberLookup(viewTagValue, renderer);
+        if (!found && renderer.rendererConfig && typeof renderer.rendererConfig.getInspectorDataForViewTag === 'function') {
+          try {
+            var viewData = renderer.rendererConfig.getInspectorDataForViewTag(viewTagValue);
+            if (viewData) {
+              found = getFiberFromViewData(viewData);
+            }
+          } catch (e) {}
+        }
+        if (found) {
+          cacheFiberForTag(viewTagValue, found, 'renderer', renderer);
+          return found;
+        }
+      }
+      var hook = g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      if (hook && typeof hook.getFiberRoots === 'function') {
+        try {
+          var ids = [];
+          if (hook.renderers && hook.renderers.size) {
+            hook.renderers.forEach(function (_renderer, id) {
+              ids.push(id);
+            });
+          }
+          if (!ids.length) {
+            ids = [1];
+          }
+          for (var h = 0; h < ids.length; h++) {
+            var roots = hook.getFiberRoots(ids[h]);
+            if (!roots || !roots.size) {
+              continue;
+            }
+            var iter = roots.values();
+            var next = iter.next();
+            while (!next.done) {
+              var root = next.value;
+              if (root && root.current) {
+                var hookFound = findFiberByNativeTag(root.current, viewTagValue);
+                if (hookFound) {
+                  return hookFound;
+                }
+              }
+              next = iter.next();
+            }
+          }
+        } catch (e) {}
+      }
+      return null;
+    }
+
+    function findRootForFiber(fiber) {
+      var current = fiber;
+      while (current && current.return) {
+        current = current.return;
+      }
+      return current && current.stateNode ? current.stateNode : null;
+    }
+
+    function isFabricRuntime() {
+      return !!(g.nativeFabricUIManager || g.__nativeFabricUIManager);
+    }
+
+    function getOverrideDriver(preferredRenderer) {
+      var hook = g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      var preferredId = preferredRenderer && (preferredRenderer.id || preferredRenderer.rendererID);
+      if (hook && hook.rendererInterfaces) {
+        try {
+          if (preferredId != null) {
+            if (typeof hook.rendererInterfaces.get === 'function') {
+              var preferredInterface = hook.rendererInterfaces.get(preferredId);
+              if (preferredInterface) {
+                return { driver: preferredInterface, source: 'interface' };
+              }
+            } else if (typeof hook.rendererInterfaces === 'object') {
+              if (hook.rendererInterfaces[preferredId]) {
+                return { driver: hook.rendererInterfaces[preferredId], source: 'interface' };
+              }
+            }
+          }
+          if (!preferredRenderer) {
+            if (typeof hook.rendererInterfaces.values === 'function') {
+              var iter = hook.rendererInterfaces.values();
+              var next = iter.next();
+              if (!next.done) {
+                return { driver: next.value, source: 'interface' };
+              }
+            } else if (typeof hook.rendererInterfaces === 'object') {
+              var keys = Object.keys(hook.rendererInterfaces);
+              if (keys.length) {
+                return { driver: hook.rendererInterfaces[keys[0]], source: 'interface' };
+              }
+            }
+          }
+        } catch (e) {}
+      }
+      if (isFabricRuntime()) {
+        return null;
+      }
+      if (preferredRenderer && typeof preferredRenderer.overrideProps === 'function') {
+        return { driver: preferredRenderer, source: 'renderer' };
+      }
+      if (!preferredRenderer && hook && hook.renderers) {
+        try {
+          if (typeof hook.renderers.values === 'function') {
+            var rendererIter = hook.renderers.values();
+            var rendererNext = rendererIter.next();
+            while (!rendererNext.done) {
+              var renderer = rendererNext.value;
+              if (renderer && typeof renderer.overrideProps === 'function') {
+                return { driver: renderer, source: 'renderer' };
+              }
+              rendererNext = rendererIter.next();
+            }
+          } else if (typeof hook.renderers === 'object') {
+            var rendererKeys = Object.keys(hook.renderers);
+            for (var i = 0; i < rendererKeys.length; i++) {
+              var candidate = hook.renderers[rendererKeys[i]];
+              if (candidate && typeof candidate.overrideProps === 'function') {
+                return { driver: candidate, source: 'renderer' };
+              }
+            }
+          }
+        } catch (e) {}
+      }
+      if (!preferredRenderer && Array.isArray(g.__bloomInspectorRenderers)) {
+        for (var j = 0; j < g.__bloomInspectorRenderers.length; j++) {
+          var cached = g.__bloomInspectorRenderers[j];
+          if (cached && typeof cached.overrideProps === 'function') {
+            return { driver: cached, source: 'renderer' };
+          }
+        }
+      }
+      return null;
+    }
+
+    function logDevtoolsHookState(label) {
+      if (g.__bloomInspectorLoggedHookState) {
+        return;
+      }
+      g.__bloomInspectorLoggedHookState = true;
+      try {
+        var hook = g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+        if (!hook) {
+          log('live edit hook missing ' + (label || 'unknown'));
+          return;
+        }
+        var renderersSize = 0;
+        var renderersType = hook.renderers ? typeof hook.renderers : 'none';
+        var renderersKeysCount = 0;
+        if (hook.renderers && typeof hook.renderers.size === 'number') {
+          renderersSize = hook.renderers.size;
+        } else if (hook.renderers && typeof hook.renderers === 'object') {
+          try {
+            renderersKeysCount = Object.keys(hook.renderers).length;
+          } catch (e) {}
+        }
+        var interfacesSize = 0;
+        var interfacesType = hook.rendererInterfaces ? typeof hook.rendererInterfaces : 'none';
+        var interfacesKeysCount = 0;
+        if (hook.rendererInterfaces && typeof hook.rendererInterfaces.size === 'number') {
+          interfacesSize = hook.rendererInterfaces.size;
+        } else if (hook.rendererInterfaces && typeof hook.rendererInterfaces === 'object') {
+          try {
+            interfacesKeysCount = Object.keys(hook.rendererInterfaces).length;
+          } catch (e) {}
+        }
+        var hookKeys = [];
+        try {
+          hookKeys = Object.keys(hook);
+        } catch (e) {}
+        log(
+          'live edit hook state ' +
+            (label || 'unknown') +
+            ' renderers=' +
+            String(renderersSize) +
+            ' renderersType=' +
+            String(renderersType) +
+            ' renderersKeys=' +
+            String(renderersKeysCount) +
+            ' interfaces=' +
+            String(interfacesSize) +
+            ' interfacesType=' +
+            String(interfacesType) +
+            ' interfacesKeys=' +
+            String(interfacesKeysCount) +
+            ' keys=' +
+            hookKeys.slice(0, 8).join(',')
+        );
+        if (hook.rendererInterfaces && hook.rendererInterfaces.size) {
+          var idx = 0;
+          hook.rendererInterfaces.forEach(function (value, key) {
+            if (idx >= 3) {
+              return;
+            }
+            var hasOverride = value && typeof value.overrideProps === 'function';
+            log(
+              'live edit rendererInterface id=' +
+                String(key) +
+                ' override=' +
+                String(hasOverride)
+            );
+            idx += 1;
+          });
+        }
+        if (hook.renderers && hook.renderers.size) {
+          var rIdx = 0;
+          hook.renderers.forEach(function (value, key) {
+            if (rIdx >= 3) {
+              return;
+            }
+            var hasOverride = value && typeof value.overrideProps === 'function';
+            log(
+              'live edit renderer id=' + String(key) + ' override=' + String(hasOverride)
+            );
+            rIdx += 1;
+          });
+        } else if (hook.renderers && typeof hook.renderers === 'object') {
+          var rKeys = Object.keys(hook.renderers);
+          for (var r = 0; r < rKeys.length && r < 3; r++) {
+            var val = hook.renderers[rKeys[r]];
+            var hasOverride2 = val && typeof val.overrideProps === 'function';
+            log(
+              'live edit renderer key=' + String(rKeys[r]) + ' override=' + String(hasOverride2)
+            );
+          }
+        }
+      } catch (e) {
+        log('live edit hook log error=' + (e && e.message ? e.message : 'unknown'));
+      }
+    }
+
+    function applyOverrideProps(driver, fiber, mergedProps, nextProps) {
+      if (!driver || !fiber || !mergedProps) {
+        return false;
+      }
+      if (typeof driver.overrideProps !== 'function') {
+        return false;
+      }
+      var applied = false;
+      try {
+        if (mergedProps.style != null) {
+          driver.overrideProps(fiber, ['style'], mergedProps.style);
+          applied = true;
+        }
+        var textValue = extractTextValue(nextProps);
+        if (textValue != null) {
+          driver.overrideProps(fiber, ['children'], textValue);
+          applied = true;
+        }
+        for (var key in mergedProps) {
+          if (!Object.prototype.hasOwnProperty.call(mergedProps, key)) {
+            continue;
+          }
+          if (key === 'style') {
+            continue;
+          }
+          driver.overrideProps(fiber, [key], mergedProps[key]);
+          applied = true;
+        }
+      } catch (e) {
+        if (DEBUG_LOGS) {
+          log('live edit overrideProps error=' + (e && e.message ? e.message : 'unknown'));
+        }
+      }
+      return applied;
+    }
+
+    function scheduleUpdateWithRenderer(renderer, fiber) {
+      if (!renderer || typeof renderer.scheduleUpdateOnFiber !== 'function') {
+        if (
+          renderer &&
+          typeof renderer.markUpdateLaneFromFiberToRoot === 'function' &&
+          typeof renderer.ensureRootIsScheduled === 'function'
+        ) {
+          try {
+            var lane = 0;
+            if (typeof renderer.requestUpdateLane === 'function') {
+              lane = renderer.requestUpdateLane(fiber);
+            }
+            var rootFromMark = renderer.markUpdateLaneFromFiberToRoot(fiber, lane);
+            if (rootFromMark) {
+              var eventTime = 0;
+              if (typeof renderer.requestEventTime === 'function') {
+                eventTime = renderer.requestEventTime();
+              }
+              renderer.ensureRootIsScheduled(rootFromMark, eventTime);
+              return true;
+            }
+          } catch (e) {}
+        }
+        return false;
+      }
+      try {
+        var root = findRootForFiber(fiber);
+        var eventTime = 0;
+        var lane = 0;
+        if (typeof renderer.requestEventTime === 'function') {
+          eventTime = renderer.requestEventTime();
+        }
+        if (typeof renderer.requestUpdateLane === 'function') {
+          lane = renderer.requestUpdateLane(fiber);
+        }
+        try {
+          if (root) {
+            renderer.scheduleUpdateOnFiber(root, fiber, lane, eventTime);
+            return true;
+          }
+        } catch (e) {}
+        try {
+          renderer.scheduleUpdateOnFiber(fiber, lane, eventTime);
+          return true;
+        } catch (e) {}
+        try {
+          renderer.scheduleUpdateOnFiber(fiber, lane);
+          return true;
+        } catch (e) {}
+        try {
+          renderer.scheduleUpdateOnFiber(fiber);
+          return true;
+        } catch (e) {}
+      } catch (e) {}
+      return false;
+    }
+
+    function forceUpdateFiber(fiber) {
+      var current = fiber;
+      while (current) {
+        var updater = current.updater || (current.stateNode && current.stateNode.updater);
+        if (updater && typeof updater.enqueueForceUpdate === 'function') {
+          try {
+            updater.enqueueForceUpdate(current);
+            return true;
+          } catch (e) {}
+        }
+        if (current.stateNode && typeof current.stateNode.forceUpdate === 'function') {
+          try {
+            current.stateNode.forceUpdate();
+            return true;
+          } catch (e) {}
+        }
+        for (var ri = 0; ri < renderers.length; ri++) {
+          if (scheduleUpdateWithRenderer(renderers[ri], current)) {
+            return true;
+          }
+        }
+        current = current.return;
+      }
+      for (var rj = 0; rj < renderers.length; rj++) {
+        if (scheduleUpdateWithRenderer(renderers[rj], fiber)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    emitter.addListener('bloomInspectorLiveEdit', function (payload) {
+      if (!payload) {
+        return;
+      }
+      var debug = !!payload.debug;
+      if (!debug && payload.props && payload.props.__bloomInspectorDebug) {
+        debug = true;
+      }
+      if (debug) {
+        DEBUG_LOGS = true;
+      }
+      var viewTagValue = payload.reactTag != null ? payload.reactTag : payload.viewTag;
+      if (typeof viewTagValue === 'string') {
+        var parsedTag = Number(viewTagValue);
+        if (!isNaN(parsedTag)) {
+          viewTagValue = parsedTag;
+        }
+      }
+      var nextProps = payload.props != null ? payload.props : payload.nextProps != null ? payload.nextProps : payload;
+      if (!nextProps || typeof nextProps !== 'object') {
+        log('live edit missing props');
+        return;
+      }
+      if (!renderers.length) {
+        try {
+          var latestRenderers = Array.from(hook.renderers.values());
+          if (latestRenderers.length) {
+            renderers = latestRenderers;
+          }
+        } catch (e) {}
+      }
+      var fiber = getCachedFiber(viewTagValue);
+      if (!fiber) {
+        fiber = tryFindFiberForTag(viewTagValue);
+      }
+      if (!fiber) {
+        log('live edit fiber not found tag=' + String(viewTagValue));
+        return;
+      }
+      var mergedProps = buildMergedProps(fiber, nextProps);
+      var applied = applyPropsToFiber(fiber, mergedProps);
+      var overrideApplied = false;
+      var cachedRenderer = getCachedRenderer(viewTagValue);
+      var overrideInfo = getOverrideDriver(cachedRenderer);
+      if (!overrideInfo && hook) {
+        bootstrapDevtoolsBackend(requireFn, hook, true);
+        overrideInfo = getOverrideDriver(cachedRenderer);
+      }
+      var overrideDriver = overrideInfo ? overrideInfo.driver : null;
+      var overrideSource = overrideInfo ? overrideInfo.source : 'none';
+      if (overrideDriver && mergedProps) {
+        overrideApplied = applyOverrideProps(overrideDriver, fiber, mergedProps, nextProps);
+        if (!overrideApplied && fiber.return) {
+          overrideApplied = applyOverrideProps(overrideDriver, fiber.return, mergedProps, nextProps);
+        }
+      }
+      var updated = forceUpdateFiber(fiber);
+      if (overrideApplied) {
+        updated = true;
+      }
+      if (!overrideApplied) {
+        logDevtoolsHookState('override-missing');
+      }
+      var textValue = extractTextValue(nextProps);
+      var textApplied = false;
+      if (!updated && textValue != null) {
+        textApplied = applyTextViaStateNode(fiber, textValue);
+      }
+      var fallbackApplied = false;
+      if (!updated && !textApplied && typeof g.__bloomInspectorApplyNativeProps === 'function') {
+        try {
+          fallbackApplied = !!g.__bloomInspectorApplyNativeProps(nextProps);
+        } catch (e) {}
+      }
+      log(
+        'live edit applied=' +
+          String(applied) +
+          ' override=' +
+          String(overrideApplied) +
+          ' overrideSource=' +
+          String(overrideSource) +
+          ' updated=' +
+          String(updated) +
+          ' text=' +
+          String(textApplied) +
+          ' fallback=' +
+          String(fallbackApplied) +
+          ' tag=' +
+          String(viewTagValue)
+      );
+    });
+
     emitter.addListener('bloomInspectorTap', function (payload) {
       if (!payload) {
         return;
@@ -1309,9 +2141,13 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
             }
           }
           if (dataByTag && dataByTag.hierarchy && dataByTag.hierarchy.length) {
+            var fiberFromDataByTag = getFiberFromViewData(dataByTag);
+            if (fiberFromDataByTag && viewTagValue != null) {
+              cacheFiberForTag(viewTagValue, fiberFromDataByTag, 'viewTag', renderer);
+            }
             handled = true;
             hadAnyData = true;
-            sendPayload(dataByTag, payload.touchID);
+            sendPayload(dataByTag, payload.touchID, viewTagValue);
             log('59 used getInspectorDataForViewTag');
             break;
           } else if (dataByTag) {
@@ -1364,6 +2200,28 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
                   var rawStack = viewData.componentStack;
                   var fiberFromViewData = getFiberFromViewData(viewData);
                   if (fiberFromViewData) {
+                    if (viewTagValue != null) {
+                      cacheFiberForTag(viewTagValue, fiberFromViewData, 'tap', renderer);
+                    }
+                    try {
+                      var taggedInstance =
+                        (viewData.closestPublicInstance &&
+                          (viewData.closestPublicInstance._nativeTag != null
+                            ? viewData.closestPublicInstance._nativeTag
+                            : viewData.closestPublicInstance.nativeTag != null
+                              ? viewData.closestPublicInstance.nativeTag
+                              : null)) ||
+                        (viewData.closestInstance &&
+                          (viewData.closestInstance._nativeTag != null
+                            ? viewData.closestInstance._nativeTag
+                            : viewData.closestInstance.nativeTag != null
+                              ? viewData.closestInstance.nativeTag
+                              : null)) ||
+                        null;
+                      if (taggedInstance != null) {
+                        cacheFiberForTag(taggedInstance, fiberFromViewData, 'viewData', renderer);
+                      }
+                    } catch (e) {}
                     var stackNames = buildComponentStackFromFiber(fiberFromViewData);
                     var nearestFiber = findNearestUserFiberWithSource(fiberFromViewData);
                     var fiberHierarchy = buildHierarchyFromFiber(fiberFromViewData);
@@ -1456,7 +2314,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
                   if (hasReactStack || hasSource) {
                     handled = true;
                     hadAnyData = true;
-                    sendPayload(viewData, payload.touchID);
+                    sendPayload(viewData, payload.touchID, viewTagValue);
                     log('A: used getInspectorDataForViewAtPoint');
                     if (pendingTimer) {
                       clearTimeout(pendingTimer);
@@ -1468,7 +2326,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
                   if (!pendingTimer && typeof setTimeout === 'function') {
                     pendingTimer = setTimeout(function () {
                       if (!handled && !fiberHandled && pendingViewData) {
-                        sendPayload(pendingViewData, payload.touchID);
+                        sendPayload(pendingViewData, payload.touchID, viewTagValue);
                         log('A: used getInspectorDataForViewAtPoint (fallback)');
                       }
                     }, 300);
@@ -1500,7 +2358,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
               if (dataByInstance && dataByInstance.hierarchy && dataByInstance.hierarchy.length) {
                 handled = true;
                 hadAnyData = true;
-                sendPayload(dataByInstance, payload.touchID);
+                sendPayload(dataByInstance, payload.touchID, viewTagValue);
                 log('57 used getInspectorDataForInstance');
                 break;
               } else if (dataByInstance) {
@@ -1592,7 +2450,7 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
               clearTimeout(pendingTimer);
             }
             hadAnyData = true;
-            sendPayload(fiberData, payload.touchID);
+            sendPayload(fiberData, payload.touchID, viewTagValue);
             log('B: used fiber lookup');
             break;
           } else {
@@ -1615,19 +2473,6 @@ static const char kBloomInspectorInjectionScript[] = R"JS(
     return attachWithRequire();
   }
   if (!attach()) {
-    try {
-      Object.defineProperty(g, '__REACT_DEVTOOLS_GLOBAL_HOOK__', {
-        configurable: true,
-        set: function (value) {
-          Object.defineProperty(g, '__REACT_DEVTOOLS_GLOBAL_HOOK__', { value: value, writable: true });
-          observeHook(value, 'setter');
-          attach();
-        },
-        get: function () {
-          return undefined;
-        },
-      });
-    } catch (e) {}
     if (g.setTimeout) {
       var attempts = 0;
       (function poll() {
@@ -1849,9 +2694,9 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
   BLOOM_LOG(@"Bloom Log: 13 hitView=%@", NSStringFromClass([hitView class]));
   _selectedHitView = hitView;
 
+  NSNumber *viewTag = nil;
   EXBloomInspector *inspectorModule = EXGetBloomInspectorModuleForVisibleApp();
   if (inspectorModule) {
-    NSNumber *viewTag = nil;
     UIView *taggedView = hitView;
     NSMutableArray<NSNumber *> *tags = [NSMutableArray array];
     NSUInteger tagDepth = 0;
@@ -1958,11 +2803,40 @@ static EXBloomInspector *EXGetBloomInspectorModuleForVisibleApp(void);
       if (title) {
         props[@"title"] = title;
       }
+    } else {
+      UIView *textView = EXBloomInspectorFindTextView(hitView);
+      if (textView) {
+        NSAttributedString *attributedText = nil;
+        @try {
+          if ([textView respondsToSelector:@selector(attributedText)]) {
+            attributedText = [textView valueForKey:@"attributedText"];
+          }
+        } @catch (NSException *exception) {
+        }
+        if (attributedText && [attributedText isKindOfClass:[NSAttributedString class]]) {
+          NSString *stringValue = attributedText.string;
+          if (stringValue.length) {
+            props[@"text"] = stringValue;
+          }
+        } else {
+          NSString *plainText = nil;
+          @try {
+            if ([textView respondsToSelector:@selector(text)]) {
+              plainText = [textView valueForKey:@"text"];
+            }
+          } @catch (NSException *exception) {
+          }
+          if (plainText.length) {
+            props[@"text"] = plainText;
+          }
+        }
+      }
     }
 
     NSDictionary *payload = @{
       @"payloadSource": @"native",
       @"touchID": touchID,
+      @"viewTag": viewTag ?: [NSNull null],
       @"frame": @{
         @"left": @(CGRectGetMinX(rectInRootWindow)),
         @"top": @(CGRectGetMinY(rectInRootWindow)),
@@ -2297,7 +3171,7 @@ RCT_EXPORT_MODULE(BloomInspector)
 
 - (NSArray<NSString *> *)supportedEvents
 {
-  return @[@"bloomInspectorToggle", @"bloomInspectorTap"];
+  return @[@"bloomInspectorToggle", @"bloomInspectorTap", @"bloomInspectorLiveEdit"];
 }
 
 - (dispatch_queue_t)methodQueue
@@ -2326,6 +3200,13 @@ RCT_EXPORT_MODULE(BloomInspector)
 {
   if (_hasListeners) {
     [self sendEventWithName:@"bloomInspectorTap" body:payload];
+  }
+}
+
+- (void)emitLiveEdit:(NSDictionary *)payload
+{
+  if (_hasListeners) {
+    [self sendEventWithName:@"bloomInspectorLiveEdit" body:payload];
   }
 }
 
@@ -2424,12 +3305,14 @@ RCT_REMAP_METHOD(getLiveEditTargetInfoAsync,
   if (!reactTag) {
     UIView *hitView = overlayView.selectedHitView;
     if (hitView) {
+      NSString *hitText = EXBloomInspectorGetPlainTextFromView(hitView);
       resolve(@{
         @"hasTarget": @YES,
         @"reason": @"no-reactTag-uikit",
         @"mode": @"uikit",
         @"availableTags": availableTags,
         @"componentViewClass": NSStringFromClass([hitView class]),
+        @"text": hitText ?: [NSNull null],
       });
     } else {
       resolve(@{@"hasTarget": @NO, @"reason": @"no-reactTag", @"availableTags": availableTags});
@@ -2483,6 +3366,7 @@ RCT_REMAP_METHOD(getLiveEditTargetInfoAsync,
       NSNumber *fabricViewAlpha = nil;
       NSNumber *fabricViewHidden = nil;
       id fabricViewBackground = [NSNull null];
+      NSString *fabricViewText = nil;
       if (hasSurfacePresenter) {
         @try {
           id presenter = [host valueForKey:@"surfacePresenter"];
@@ -2498,6 +3382,7 @@ RCT_REMAP_METHOD(getLiveEditTargetInfoAsync,
               fabricViewAlpha = @(view.alpha);
               fabricViewHidden = @(view.hidden);
               fabricViewBackground = EXBloomInspectorColorToString(view.backgroundColor) ?: [NSNull null];
+              fabricViewText = EXBloomInspectorGetPlainTextFromView(view);
             }
           }
         } @catch (__unused NSException *exception) {
@@ -2511,6 +3396,7 @@ RCT_REMAP_METHOD(getLiveEditTargetInfoAsync,
           @"reactTag": reactTag,
           @"viewName": viewName,
           @"mode": @"native",
+          @"text": fabricViewText ?: [NSNull null],
           @"availableTags": availableTags,
         });
       } else {
@@ -2527,6 +3413,7 @@ RCT_REMAP_METHOD(getLiveEditTargetInfoAsync,
           @"componentViewHidden": fabricViewHidden ?: [NSNull null],
           @"componentViewAlpha": fabricViewAlpha ?: [NSNull null],
           @"componentViewBackgroundColor": fabricViewBackground ?: [NSNull null],
+          @"text": fabricViewText ?: [NSNull null],
           @"availableTags": availableTags,
         });
       }
@@ -2565,12 +3452,19 @@ static void EXBloomInspectorApplyNativePropsToReactTag(
           if (view) {
             EXBloomInspectorApplyUIKitStyleToView(view, effectiveProps, resolve);
           } else {
-            resolve(@{
-              @"ok": @NO,
-              @"mode": @"uikit",
-              @"reason": @"forceUIKit-no-view",
-              @"reactTag": reactTag,
-            });
+            EXBloomInspectorOverlayView *overlayView =
+                [[EXBloomInspectorOverlayManager sharedInstance] viewController].overlayView;
+            UIView *fallbackView = overlayView.selectedHitView;
+            if (fallbackView) {
+              EXBloomInspectorApplyUIKitStyleToView(fallbackView, effectiveProps, resolve);
+            } else {
+              resolve(@{
+                @"ok": @NO,
+                @"mode": @"uikit",
+                @"reason": @"forceUIKit-no-view",
+                @"reactTag": reactTag,
+              });
+            }
           }
         });
         return;
@@ -2601,6 +3495,19 @@ static void EXBloomInspectorApplyNativePropsToReactTag(
         }
         [(RCTSurfacePresenter *)presenter synchronouslyUpdateViewOnUIThread:reactTag
                                                                      props:effectiveProps];
+        NSDictionary *style = [effectiveProps isKindOfClass:[NSDictionary class]]
+          ? (NSDictionary *)effectiveProps[@"style"]
+          : nil;
+        if (![style isKindOfClass:[NSDictionary class]]) {
+          style = nil;
+        }
+        if (style) {
+          EXBloomInspectorApplyTextStyleToView(view, style);
+        }
+        NSString *textOverride = EXBloomInspectorExtractTextOverride(effectiveProps);
+        if (textOverride) {
+          EXBloomInspectorApplyTextOverrideToView(view, textOverride);
+        }
         resolve(@{
           @"ok": @YES,
           @"reactTag": reactTag,
@@ -2642,12 +3549,19 @@ static void EXBloomInspectorApplyNativePropsToReactTag(
         if (view) {
           EXBloomInspectorApplyUIKitStyleToView(view, effectiveProps, resolve);
         } else {
-          resolve(@{
-            @"ok": @NO,
-            @"mode": @"uikit",
-            @"reason": @"forceUIKit-no-view",
-            @"reactTag": reactTag,
-          });
+          EXBloomInspectorOverlayView *overlayView =
+              [[EXBloomInspectorOverlayManager sharedInstance] viewController].overlayView;
+          UIView *fallbackView = overlayView.selectedHitView;
+          if (fallbackView) {
+            EXBloomInspectorApplyUIKitStyleToView(fallbackView, effectiveProps, resolve);
+          } else {
+            resolve(@{
+              @"ok": @NO,
+              @"mode": @"uikit",
+              @"reason": @"forceUIKit-no-view",
+              @"reactTag": reactTag,
+            });
+          }
         }
       });
       return;
@@ -2718,6 +3632,19 @@ static UIColor *EXBloomInspectorColorFromString(NSString *value)
   return nil;
 }
 
+static UIColor *EXBloomInspectorColorFromNumber(id value)
+{
+  if (!value || ![value respondsToSelector:@selector(unsignedIntValue)]) {
+    return nil;
+  }
+  uint32_t argb = (uint32_t)[(NSNumber *)value unsignedIntValue];
+  CGFloat alpha = ((argb >> 24) & 0xFF) / 255.0;
+  CGFloat red = ((argb >> 16) & 0xFF) / 255.0;
+  CGFloat green = ((argb >> 8) & 0xFF) / 255.0;
+  CGFloat blue = (argb & 0xFF) / 255.0;
+  return [UIColor colorWithRed:red green:green blue:blue alpha:alpha];
+}
+
 static NSTextAlignment EXBloomInspectorTextAlignmentFromString(NSString *value)
 {
   if (!value || ![value isKindOfClass:[NSString class]]) {
@@ -2745,6 +3672,133 @@ static NSString *EXBloomInspectorColorToString(UIColor *color)
           (int)roundf(g * 255.0f),
           (int)roundf(b * 255.0f),
           a];
+}
+
+static NSAttributedString *EXBloomInspectorCopyAttributedText(UIView *view)
+{
+  if (!view) {
+    return nil;
+  }
+  id value = nil;
+  @try {
+    if ([view respondsToSelector:@selector(attributedText)]) {
+      value = [view valueForKey:@"attributedText"];
+      if ([value isKindOfClass:[NSAttributedString class]]) {
+        return (NSAttributedString *)value;
+      }
+    }
+  } @catch (__unused NSException *exception) {}
+  @try {
+    value = [view valueForKey:@"attributedString"];
+    if ([value isKindOfClass:[NSAttributedString class]]) {
+      return (NSAttributedString *)value;
+    }
+  } @catch (__unused NSException *exception) {}
+  @try {
+    value = [view valueForKey:@"_attributedString"];
+    if ([value isKindOfClass:[NSAttributedString class]]) {
+      return (NSAttributedString *)value;
+    }
+  } @catch (__unused NSException *exception) {}
+  @try {
+    value = [view valueForKey:@"textStorage"];
+    if ([value isKindOfClass:[NSTextStorage class]]) {
+      return [(NSTextStorage *)value copy];
+    }
+  } @catch (__unused NSException *exception) {}
+  return nil;
+}
+
+static BOOL EXBloomInspectorApplyAttributedText(UIView *view, NSAttributedString *value)
+{
+  if (!view || !value) {
+    return NO;
+  }
+  @try {
+    if ([view respondsToSelector:@selector(setAttributedText:)]) {
+      [view setValue:value forKey:@"attributedText"];
+      return YES;
+    }
+  } @catch (__unused NSException *exception) {}
+  @try {
+    [view setValue:value forKey:@"attributedString"];
+    return YES;
+  } @catch (__unused NSException *exception) {}
+  @try {
+    [view setValue:value forKey:@"_attributedString"];
+    return YES;
+  } @catch (__unused NSException *exception) {}
+  @try {
+    id layoutManager = [view valueForKey:@"_layoutManager"];
+    if (!layoutManager) {
+      layoutManager = [view valueForKey:@"textLayoutManager"];
+    }
+    if (layoutManager) {
+      if ([layoutManager respondsToSelector:@selector(setAttributedString:)]) {
+        [layoutManager setValue:value forKey:@"attributedString"];
+        return YES;
+      }
+    }
+  } @catch (__unused NSException *exception) {}
+  @try {
+    id storage = [view valueForKey:@"textStorage"];
+    if ([storage isKindOfClass:[NSTextStorage class]]) {
+      [(NSTextStorage *)storage setAttributedString:value];
+      return YES;
+    }
+  } @catch (__unused NSException *exception) {}
+  return NO;
+}
+
+static void EXBloomInspectorForceRedraw(UIView *view)
+{
+  if (!view) {
+    return;
+  }
+  [view setNeedsDisplay];
+  [view setNeedsLayout];
+  [view invalidateIntrinsicContentSize];
+  CALayer *layer = view.layer;
+  [layer setNeedsDisplay];
+  if (layer.sublayers.count) {
+    for (CALayer *sublayer in layer.sublayers) {
+      [sublayer setNeedsDisplay];
+    }
+  }
+  if (view.superview) {
+    [view.superview setNeedsLayout];
+    [view.superview layoutIfNeeded];
+  }
+}
+
+static NSString *EXBloomInspectorGetPlainTextFromView(UIView *view)
+{
+  if (!view) {
+    return nil;
+  }
+  if ([view isKindOfClass:[UILabel class]]) {
+    return ((UILabel *)view).text;
+  }
+  if ([view isKindOfClass:[UITextView class]]) {
+    return ((UITextView *)view).text;
+  }
+  if ([view isKindOfClass:[UITextField class]]) {
+    return ((UITextField *)view).text;
+  }
+  if ([view isKindOfClass:[UIButton class]]) {
+    return [(UIButton *)view titleForState:UIControlStateNormal];
+  }
+  NSAttributedString *attr = EXBloomInspectorCopyAttributedText(view);
+  if (attr.string.length) {
+    return attr.string;
+  }
+  @try {
+    id value = [view valueForKey:@"text"];
+    if ([value isKindOfClass:[NSString class]]) {
+      return (NSString *)value;
+    }
+  } @catch (__unused NSException *exception) {}
+  return nil;
 }
 
 static NSDictionary *EXBloomInspectorRectInfo(CGRect rect)
@@ -2776,9 +3830,175 @@ static UIView *EXBloomInspectorFindTextView(UIView *view)
   return nil;
 }
 
+static NSString *EXBloomInspectorExtractTextOverride(NSDictionary *props)
+{
+  if (!props || ![props isKindOfClass:[NSDictionary class]]) {
+    return nil;
+  }
+  id value = props[@"children"];
+  if (!value) {
+    value = props[@"text"];
+  }
+  if (!value) {
+    value = props[@"value"];
+  }
+  if ([value isKindOfClass:[NSString class]]) {
+    return (NSString *)value;
+  }
+  if ([value isKindOfClass:[NSNumber class]]) {
+    return [(NSNumber *)value stringValue];
+  }
+  if ([value isKindOfClass:[NSArray class]]) {
+    NSMutableString *joined = [NSMutableString string];
+    for (id entry in (NSArray *)value) {
+      if ([entry isKindOfClass:[NSString class]]) {
+        [joined appendString:entry];
+      } else if ([entry isKindOfClass:[NSNumber class]]) {
+        [joined appendString:[(NSNumber *)entry stringValue]];
+      }
+    }
+    return joined.length ? [joined copy] : nil;
+  }
+  return nil;
+}
+
+static BOOL EXBloomInspectorApplyParagraphTextStyle(UIView *view, NSDictionary *style)
+{
+  if (!view || ![style isKindOfClass:[NSDictionary class]]) {
+    return NO;
+  }
+  NSString *className = NSStringFromClass([view class]);
+  if (![className containsString:@"Paragraph"] && ![className containsString:@"Text"]) {
+    return NO;
+  }
+
+  NSAttributedString *existing = EXBloomInspectorCopyAttributedText(view);
+  NSString *baseText = existing ? existing.string : EXBloomInspectorGetPlainTextFromView(view);
+  if (!baseText || !baseText.length) {
+    id fallbackValue = style[@"__bloomInspectorFallbackText"];
+    if ([fallbackValue isKindOfClass:[NSString class]]) {
+      baseText = (NSString *)fallbackValue;
+    } else if ([fallbackValue isKindOfClass:[NSNumber class]]) {
+      baseText = [(NSNumber *)fallbackValue stringValue];
+    }
+  }
+  if (!baseText) {
+    baseText = @"";
+  }
+
+  NSMutableAttributedString *mutableText = existing
+    ? [existing mutableCopy]
+    : [[NSMutableAttributedString alloc] initWithString:baseText];
+
+  NSRange range = NSMakeRange(0, mutableText.length);
+  if (range.length == 0) {
+    return NO;
+  }
+
+  UIColor *textColor = nil;
+  id colorValue = style[@"color"];
+  if ([colorValue isKindOfClass:[NSString class]]) {
+    textColor = EXBloomInspectorColorFromString(colorValue);
+  } else if ([colorValue isKindOfClass:[NSNumber class]]) {
+    textColor = EXBloomInspectorColorFromNumber(colorValue);
+  }
+  if (textColor) {
+    [mutableText addAttribute:NSForegroundColorAttributeName value:textColor range:range];
+  }
+
+  NSNumber *fontSize = [style[@"fontSize"] isKindOfClass:[NSNumber class]] ? style[@"fontSize"] : nil;
+  if (fontSize) {
+    UIFont *font = [mutableText attribute:NSFontAttributeName atIndex:0 effectiveRange:nil];
+    CGFloat size = [fontSize floatValue];
+    if (size > 0) {
+      UIFont *nextFont = font ? [font fontWithSize:size] : [UIFont systemFontOfSize:size];
+      [mutableText addAttribute:NSFontAttributeName value:nextFont range:range];
+    }
+  }
+
+  NSString *textAlign = [style[@"textAlign"] isKindOfClass:[NSString class]] ? style[@"textAlign"] : nil;
+  if (textAlign) {
+    NSMutableParagraphStyle *paragraphStyle = [[NSMutableParagraphStyle alloc] init];
+    paragraphStyle.alignment = EXBloomInspectorTextAlignmentFromString(textAlign);
+    [mutableText addAttribute:NSParagraphStyleAttributeName value:paragraphStyle range:range];
+  }
+
+  NSString *decoration = [style[@"textDecorationLine"] isKindOfClass:[NSString class]]
+                             ? style[@"textDecorationLine"]
+                             : nil;
+  if (decoration && [decoration containsString:@"underline"]) {
+    UIColor *underlineColor = nil;
+    id underlineValue = style[@"textDecorationColor"];
+    if ([underlineValue isKindOfClass:[NSString class]]) {
+      underlineColor = EXBloomInspectorColorFromString(underlineValue);
+    } else if ([underlineValue isKindOfClass:[NSNumber class]]) {
+      underlineColor = EXBloomInspectorColorFromNumber(underlineValue);
+    }
+    [mutableText addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:range];
+    if (underlineColor) {
+      [mutableText addAttribute:NSUnderlineColorAttributeName value:underlineColor range:range];
+    }
+  }
+  if (!EXBloomInspectorApplyAttributedText(view, mutableText)) {
+    return NO;
+  }
+  EXBloomInspectorForceRedraw(view);
+  return YES;
+}
+
+static BOOL EXBloomInspectorApplyTextOverrideToView(UIView *view, NSString *textValue)
+{
+  if (!view || ![textValue isKindOfClass:[NSString class]]) {
+    return NO;
+  }
+
+  if ([view isKindOfClass:[UILabel class]]) {
+    ((UILabel *)view).text = textValue;
+    return YES;
+  }
+  if ([view isKindOfClass:[UITextView class]]) {
+    ((UITextView *)view).text = textValue;
+    return YES;
+  }
+  if ([view isKindOfClass:[UITextField class]]) {
+    ((UITextField *)view).text = textValue;
+    return YES;
+  }
+  if ([view isKindOfClass:[UIButton class]]) {
+    [(UIButton *)view setTitle:textValue forState:UIControlStateNormal];
+    return YES;
+  }
+
+  NSString *className = NSStringFromClass([view class]);
+  if ([className containsString:@"Paragraph"] || [className containsString:@"Text"]) {
+    NSAttributedString *existing = EXBloomInspectorCopyAttributedText(view);
+    NSDictionary *attributes = nil;
+    if (existing.length > 0) {
+      attributes = [existing attributesAtIndex:0 effectiveRange:nil];
+    }
+    NSMutableAttributedString *mutableText = attributes
+      ? [[NSMutableAttributedString alloc] initWithString:textValue attributes:attributes]
+      : [[NSMutableAttributedString alloc] initWithString:textValue];
+    if (!EXBloomInspectorApplyAttributedText(view, mutableText)) {
+      return NO;
+    }
+    EXBloomInspectorForceRedraw(view);
+    return YES;
+  }
+
+  UIView *textView = EXBloomInspectorFindTextView(view);
+  if (textView && textView != view) {
+    return EXBloomInspectorApplyTextOverrideToView(textView, textValue);
+  }
+  return NO;
+}
+
 static void EXBloomInspectorApplyTextStyleToView(UIView *view, NSDictionary *style)
 {
   if (!view || ![style isKindOfClass:[NSDictionary class]]) {
+    return;
+  }
+  if (EXBloomInspectorApplyParagraphTextStyle(view, style)) {
     return;
   }
   UIView *textView = EXBloomInspectorFindTextView(view);
@@ -2789,6 +4009,8 @@ static void EXBloomInspectorApplyTextStyleToView(UIView *view, NSDictionary *sty
   id colorValue = style[@"color"];
   if ([colorValue isKindOfClass:[NSString class]]) {
     textColor = EXBloomInspectorColorFromString(colorValue);
+  } else if ([colorValue isKindOfClass:[NSNumber class]]) {
+    textColor = EXBloomInspectorColorFromNumber(colorValue);
   }
   if (textColor && [textView respondsToSelector:@selector(setTextColor:)]) {
     [(id)textView setTextColor:textColor];
@@ -2825,11 +4047,10 @@ static void EXBloomInspectorApplyTextStyleToView(UIView *view, NSDictionary *sty
     id underlineValue = style[@"textDecorationColor"];
     if ([underlineValue isKindOfClass:[NSString class]]) {
       underlineColor = EXBloomInspectorColorFromString(underlineValue);
+    } else if ([underlineValue isKindOfClass:[NSNumber class]]) {
+      underlineColor = EXBloomInspectorColorFromNumber(underlineValue);
     }
-    NSAttributedString *existing = nil;
-    if ([textView respondsToSelector:@selector(attributedText)]) {
-      existing = [(id)textView attributedText];
-    }
+    NSAttributedString *existing = EXBloomInspectorCopyAttributedText(textView);
     NSString *text = nil;
     if (!existing && [textView respondsToSelector:@selector(text)]) {
       text = [(id)textView text];
@@ -2866,9 +4087,14 @@ static void EXBloomInspectorApplyUIKitStyleToView(UIView *view, NSDictionary *pr
   if (![style isKindOfClass:[NSDictionary class]]) {
     style = props;
   }
-  if (![style isKindOfClass:[NSDictionary class]] || style.count == 0) {
+  NSString *textOverride = EXBloomInspectorExtractTextOverride(props);
+  BOOL hasStyle = [style isKindOfClass:[NSDictionary class]] && style.count > 0;
+  if (!hasStyle && !textOverride) {
     resolve(@{@"ok": @NO, @"reason": @"empty-style", @"mode": @"uikit"});
     return;
+  }
+  if (!hasStyle) {
+    style = @{};
   }
 
   id bg = style[@"backgroundColor"];
@@ -2899,6 +4125,13 @@ static void EXBloomInspectorApplyUIKitStyleToView(UIView *view, NSDictionary *pr
         }
       }
     }
+  } else if ([bg isKindOfClass:[NSNumber class]]) {
+    UIColor *color = EXBloomInspectorColorFromNumber(bg);
+    if (color) {
+      view.backgroundColor = color;
+      view.layer.backgroundColor = color.CGColor;
+      view.opaque = YES;
+    }
   }
   id opacity = style[@"opacity"];
   if ([opacity isKindOfClass:[NSNumber class]]) {
@@ -2914,6 +4147,11 @@ static void EXBloomInspectorApplyUIKitStyleToView(UIView *view, NSDictionary *pr
     if (color) {
       view.layer.borderColor = color.CGColor;
     }
+  } else if ([borderColor isKindOfClass:[NSNumber class]]) {
+    UIColor *color = EXBloomInspectorColorFromNumber(borderColor);
+    if (color) {
+      view.layer.borderColor = color.CGColor;
+    }
   }
   id borderWidth = style[@"borderWidth"];
   if ([borderWidth isKindOfClass:[NSNumber class]]) {
@@ -2925,16 +4163,26 @@ static void EXBloomInspectorApplyUIKitStyleToView(UIView *view, NSDictionary *pr
     view.layer.masksToBounds = YES;
   }
   EXBloomInspectorApplyTextStyleToView(view, style);
+  if (textOverride) {
+    EXBloomInspectorApplyTextOverrideToView(view, textOverride);
+  }
   id tint = style[@"tintColor"];
   if ([tint isKindOfClass:[NSString class]]) {
     UIColor *color = EXBloomInspectorColorFromString(tint);
     if (color) {
       view.tintColor = color;
     }
+  } else if ([tint isKindOfClass:[NSNumber class]]) {
+    UIColor *color = EXBloomInspectorColorFromNumber(tint);
+    if (color) {
+      view.tintColor = color;
+    }
   }
   id textColor = style[@"color"];
-  if ([textColor isKindOfClass:[NSString class]]) {
-    UIColor *color = EXBloomInspectorColorFromString(textColor);
+  if ([textColor isKindOfClass:[NSString class]] || [textColor isKindOfClass:[NSNumber class]]) {
+    UIColor *color = [textColor isKindOfClass:[NSString class]]
+      ? EXBloomInspectorColorFromString(textColor)
+      : EXBloomInspectorColorFromNumber(textColor);
     if (color) {
       if ([view isKindOfClass:[UILabel class]]) {
         ((UILabel *)view).textColor = color;
@@ -3015,6 +4263,31 @@ RCT_REMAP_METHOD(applyNativePropsToTagAsync,
   }
 
   EXBloomInspectorApplyNativePropsToReactTag(host, reactTag, props, resolve);
+}
+
+RCT_REMAP_METHOD(applyLiveEditToAppAsync,
+                 applyLiveEditToApp:(NSNumber *)reactTag
+                 props:(NSDictionary *)props
+                 withResolver:(RCTPromiseResolveBlock)resolve
+                 rejecter:(RCTPromiseRejectBlock)reject)
+{
+  if (!reactTag) {
+    resolve(@{@"ok": @NO, @"reason": @"no-tag"});
+    return;
+  }
+
+  EXBloomInspector *inspectorModule = EXGetBloomInspectorModuleForVisibleApp();
+  if (!inspectorModule) {
+    resolve(@{@"ok": @NO, @"reason": @"no-inspector"});
+    return;
+  }
+
+  NSDictionary *payload = @{
+    @"reactTag": reactTag ?: [NSNull null],
+    @"props": props ?: @{},
+  };
+  [inspectorModule emitLiveEdit:payload];
+  resolve(@{@"ok": @YES});
 }
 
 RCT_EXPORT_METHOD(sendPick:(NSDictionary *)payload)

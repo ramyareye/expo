@@ -102,3 +102,31 @@ Dev server note:
 - This is primarily an iOS feature (native overlay window).
 - There are multiple “DevTools hook availability” mechanisms (bundle prelude + runtime injection). The main tap→payload bridge is the JS code in `useBloomInspector.tsx`.
 - Elements rendered with `pointerEvents="none"` won’t be selectable (the overlay hit-test can’t “see” them as a target).
+
+## Live Edit (experimental)
+
+The overlay panel’s **Edit** tab provides quick, best‑effort controls (conditional by component type):
+- **View:** background swatches + hex input, applied as `{ backgroundColor, opacity }`.
+- **Text:** color swatches + hex input, align toggles, underline toggle, plus a text-content input.
+Advanced JSON editing is hidden behind an “Advanced” toggle.
+
+Implementation notes:
+- **View edits** use the **native path** (`applyNativePropsAsync`) with Fabric’s
+  `synchronouslyUpdateViewOnUIThread` when available and a UIKit fallback when not.
+- **Text styles (color/align/underline)** now go through the **JS runtime override** path
+  (`applyLiveEditToAppAsync`), which lets React/Fabric recompute the attributed string.
+- **Text content editing is disabled** in the UI for now.
+- Changes are **visual‑only** and can be overwritten on re-render (no React state update).
+
+Fallback note:
+- A native-only fallback pick is enabled when JS inspector data is unavailable. This ensures
+  selection still works even if no React renderer is registered on the DevTools hook.
+
+## What didn’t work (and why)
+
+- **Native text style edits on Fabric Text**: UIKit/KVC updates on
+  `RCTParagraphComponentView` report success but don’t reliably repaint. Fabric owns the
+  attributed string and can overwrite or ignore UIKit mutations.
+- **DevTools `overrideProps` without renderers**: the DevTools hook sometimes has
+  `renderers=0`, so `overrideProps` can’t schedule a commit. This is why we moved text
+  styles to the JS runtime override path.

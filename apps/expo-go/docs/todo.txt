@@ -17,8 +17,6 @@ Decide expected behavior for library/native components:
 - now supported via `ownerSource` heuristic (prefers nearest non-bundle, non-`node_modules` source; prefers `/apps/`).
 - decide when to prefer “usage site” vs component file, and how to present it in the UI.
 
-Fiber-based React name fallback (match react-native-dev-inspector)
-
 Extract React component names/source when componentStack is empty.
 Status: pending.
 Confirm source/line for common components
@@ -47,13 +45,13 @@ Optional/bonus
 Better hierarchy formatting
 Prop filters / search (done)
 Live prop editing via `setNativeProps` (experimental) (done)
+Opt-in save-to-source pipeline (Visual Editor server + AST updates + `data-editor-id`/Babel plugin) for persistent edits (requires app instrumentation).
 Live Edit (Text on Fabric):
-- Investigate proper Fabric text mutation (attributed string / shadow tree) instead of UIKit fallback.
-- Decide if MVP scope is “View-only” and document Text limitations.
+- Text styles now use the JS runtime override path (applyLiveEditToAppAsync). Keep an eye on renderer availability.
+- Text content override is disabled in the UI for now.
 Text background is not supported (Text draws inline); use color/underline/weight or parent View bg.
 Live Edit (prop persistence):
-- Explore injected JS + event emitter bridge to edit Fiber in app runtime (shadow tree via reconciliation).
-- If pursued, add “persistent mode” toggle and warnings (dev-only, private API).
+- App-runtime/Fiber overrides are used for text styles only. View edits remain native (applyNativePropsAsync).
 AI research notes captured in `apps/expo-go/docs/research/bloom-inspector-ai-notes.md`.
 Source snippet if needed
 Improve snippet UI readability (background + padding + highlight current line). (done)

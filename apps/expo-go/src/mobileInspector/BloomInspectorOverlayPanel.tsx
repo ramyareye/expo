@@ -20,6 +20,7 @@ type Frame = { left: number; top: number; width: number; height: number };
 type HierarchyItem = { name: string };
 type PickPayload = {
   frame?: Frame;
+  viewTag?: number | string;
   hierarchy?: HierarchyItem[];
   props?: Record<string, unknown>;
   selectedIndex?: number;
@@ -40,6 +41,116 @@ type SourceSnippet = {
 
 type SourceSnippetLine = { lineNumber: number; text: string; isCurrent: boolean };
 
+const QUICK_COLORS = ['#ff0000', '#ff7a00', '#ffd400', '#00c853', '#00b0ff', '#7c4dff', '#ff4081'];
+const HIGHLIGHT_KEYWORDS = new Set([
+  'as',
+  'async',
+  'await',
+  'break',
+  'case',
+  'catch',
+  'class',
+  'const',
+  'continue',
+  'default',
+  'delete',
+  'do',
+  'else',
+  'enum',
+  'export',
+  'extends',
+  'false',
+  'finally',
+  'for',
+  'from',
+  'function',
+  'get',
+  'if',
+  'implements',
+  'import',
+  'in',
+  'instanceof',
+  'interface',
+  'let',
+  'new',
+  'null',
+  'of',
+  'private',
+  'protected',
+  'public',
+  'readonly',
+  'return',
+  'set',
+  'static',
+  'super',
+  'switch',
+  'this',
+  'throw',
+  'true',
+  'try',
+  'type',
+  'typeof',
+  'undefined',
+  'var',
+  'void',
+  'while',
+  'yield',
+]);
+const HIGHLIGHT_REGEX = new RegExp(
+  [
+    '//.*$',
+    '/\\*.*?\\*/',
+    '`[^`]*`',
+    "'(?:\\\\.|[^'\\\\])*'",
+    '"(?:\\\\.|[^"\\\\])*"',
+    '</?[A-Za-z][\\w:-]*',
+    '\\b\\d+(?:\\.\\d+)?\\b',
+    `\\b(?:${Array.from(HIGHLIGHT_KEYWORDS).join('|')})\\b`,
+    '[{}()\\[\\];,.:<>/+*\\-=!&|^%?~]',
+  ].join('|'),
+  'g'
+);
+
+type HighlightTokenKind = 'plain' | 'comment' | 'string' | 'number' | 'keyword' | 'tag' | 'punct';
+type HighlightToken = { text: string; kind: HighlightTokenKind };
+
+function tokenizeHighlightLine(text: string): HighlightToken[] {
+  if (!text) {
+    return [{ text: '', kind: 'plain' }];
+  }
+  const tokens: HighlightToken[] = [];
+  let lastIndex = 0;
+  HIGHLIGHT_REGEX.lastIndex = 0;
+  let match: RegExpExecArray | null = null;
+  while ((match = HIGHLIGHT_REGEX.exec(text))) {
+    const index = match.index ?? 0;
+    if (index > lastIndex) {
+      tokens.push({ text: text.slice(lastIndex, index), kind: 'plain' });
+    }
+    const token = match[0];
+    let kind: HighlightTokenKind = 'plain';
+    if (token.startsWith('//') || token.startsWith('/*')) {
+      kind = 'comment';
+    } else if (token.startsWith('"') || token.startsWith("'") || token.startsWith('`')) {
+      kind = 'string';
+    } else if (token.startsWith('<') && /<\/?[A-Za-z]/.test(token)) {
+      kind = 'tag';
+    } else if (/^\d/.test(token)) {
+      kind = 'number';
+    } else if (HIGHLIGHT_KEYWORDS.has(token)) {
+      kind = 'keyword';
+    } else if (/^[{}()[\];,.:<>/+*\-=!&|^%?~]$/.test(token)) {
+      kind = 'punct';
+    }
+    tokens.push({ text: token, kind });
+    lastIndex = index + token.length;
+  }
+  if (lastIndex < text.length) {
+    tokens.push({ text: text.slice(lastIndex), kind: 'plain' });
+  }
+  return tokens;
+}
+
 type LiveEditTargetInfo =
   | { hasTarget: false }
   | {
@@ -50,6 +161,7 @@ type LiveEditTargetInfo =
       reason?: string;
       availableTags?: number[];
       componentViewClass?: string | null;
+      text?: string | null;
     }
   | {
       hasTarget: boolean;
@@ -59,6 +171,7 @@ type LiveEditTargetInfo =
       reason?: string;
       availableTags?: number[];
       componentViewClass?: string | null;
+      text?: string | null;
     };
 
 type LiveEditApplyResult =
@@ -284,11 +397,12 @@ export function BloomInspectorOverlayPanel() {
   ensureLiveEditRuntime();
   const [enabled, setEnabled] = useState(false);
   const [payload, setPayload] = useState<PickPayload | null>(null);
-  type TabKey = 'overview' | 'source' | 'hierarchy' | 'props' | 'edit' | 'raw';
+  type TabKey = 'overview' | 'source' | 'hierarchy' | 'props' | 'edit';
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [showRawSource, setShowRawSource] = useState(false);
   const [showFiberNodes, setShowFiberNodes] = useState(false);
   const [showFullStack, setShowFullStack] = useState(false);
+  const [snippetTheme, setSnippetTheme] = useState<'light' | 'dark'>('light');
   const [propsQuery, setPropsQuery] = useState('');
   const [sourceSnippet, setSourceSnippet] = useState<SourceSnippet | null>(null);
   const [isSnippetLoading, setIsSnippetLoading] = useState(false);
@@ -298,6 +412,13 @@ export function BloomInspectorOverlayPanel() {
   const [liveEditTargetInfo, setLiveEditTargetInfo] = useState<LiveEditTargetInfo | null>(null);
   const [liveEditTargetIndex, setLiveEditTargetIndex] = useState(0);
   const [liveEditLastResult, setLiveEditLastResult] = useState<LiveEditApplyResult | null>(null);
+  const [quickViewColor, setQuickViewColor] = useState('#ff0000');
+  const [quickTextColor, setQuickTextColor] = useState('#ff0000');
+  const [quickTextAlign, setQuickTextAlign] = useState<'left' | 'center' | 'right'>('left');
+  const [quickUnderline, setQuickUnderline] = useState(false);
+  const [quickTextValue, setQuickTextValue] = useState('');
+  const [showAdvancedEdit, setShowAdvancedEdit] = useState(false);
+  const [showRawPayload, setShowRawPayload] = useState(false);
   const [panelHeight, setPanelHeight] = useState<number | null>(null);
   const panelRef = useRef<View | null>(null);
   const payloadByTouchID = useRef<Map<number, { native?: PickPayload; js?: PickPayload }>>(
@@ -481,23 +602,32 @@ export function BloomInspectorOverlayPanel() {
   }, [collapsedHierarchyIndex, hierarchyItems]);
 
   const fallbackStackLines = useMemo(() => {
-    if (reactStackLines.length) {
-      return reactStackLines.map(getComponentNameFromComponentStackLine).filter(Boolean);
-    }
-    return hierarchyItems
+    const reactNames = reactStackLines.map(getComponentNameFromComponentStackLine).filter(Boolean);
+    const hierarchyNames = hierarchyItems
       .map((item) => item.name)
       .filter((name) => !isHostHierarchyName(name) && !isInternalComponentName(name));
+    if (reactNames.length && reactNames.some((name) => isLeafishStackName(name))) {
+      return reactNames;
+    }
+    if (hierarchyNames.length) {
+      return hierarchyNames;
+    }
+    return reactNames;
   }, [reactStackLines, hierarchyItems]);
 
   const displayedStackParts = useMemo(() => {
+    const baseStack = showFullStack
+      ? fallbackStackLines
+      : fallbackStackLines.filter((name) => !isNoisyStackName(name));
+    const ordered = baseStack;
     if (showFullStack) {
-      return fallbackStackLines;
+      return ordered;
     }
-    const filtered = fallbackStackLines.filter((name) => !isNoisyStackName(name));
-    if (filtered.length <= 12) {
-      return filtered;
+    const limit = 12;
+    if (ordered.length <= limit) {
+      return ordered;
     }
-    return filtered.slice(-12);
+    return [...ordered.slice(0, limit - 1), '…', ordered[ordered.length - 1]];
   }, [fallbackStackLines, showFullStack]);
 
   const sourceLabel = useMemo(() => {
@@ -749,24 +879,27 @@ export function BloomInspectorOverlayPanel() {
   const applyNativeProps = useCallback(
     (nextProps: unknown) => {
       try {
-        const jsInfo =
-          typeof (globalThis as any).__bloomInspectorGetNativePropsTargetInfo === 'function'
-            ? (globalThis as any).__bloomInspectorGetNativePropsTargetInfo()
-            : null;
-        const jsApply =
-          typeof (globalThis as any).__bloomInspectorApplyNativeProps === 'function'
-            ? ((globalThis as any).__bloomInspectorApplyNativeProps as
-                | ((props: unknown) => boolean)
-                | undefined)
-            : undefined;
-
         const nativeApply = NativeModules.BloomInspectorOverlay?.applyNativePropsAsync as
           | ((props: Record<string, unknown>) => Promise<LiveEditApplyResult>)
           | undefined;
         const nativeApplyToTag = NativeModules.BloomInspectorOverlay?.applyNativePropsToTagAsync as
           | ((reactTag: number, props: Record<string, unknown>) => Promise<LiveEditApplyResult>)
           | undefined;
+        const runtimeApply = NativeModules.BloomInspectorOverlay?.applyLiveEditToAppAsync as
+          | ((reactTag: number, props: Record<string, unknown>) => Promise<{ ok?: boolean }>)
+          | undefined;
 
+        const payloadViewTag = (() => {
+          const raw = payload?.viewTag;
+          if (typeof raw === 'number') {
+            return raw;
+          }
+          if (typeof raw === 'string') {
+            const parsed = Number(raw);
+            return Number.isFinite(parsed) ? parsed : null;
+          }
+          return null;
+        })();
         const availableTags =
           liveEditTargetInfo && 'availableTags' in liveEditTargetInfo
             ? (liveEditTargetInfo.availableTags ?? [])
@@ -838,9 +971,23 @@ export function BloomInspectorOverlayPanel() {
             'lineHeight',
           ].some((key) => key in candidate);
         })();
+        const hasTextOverride = (() => {
+          if (!nextProps || typeof nextProps !== 'object') {
+            return false;
+          }
+          const value =
+            (nextProps as Record<string, unknown>).text ??
+            (nextProps as Record<string, unknown>).children ??
+            (nextProps as Record<string, unknown>).value;
+          return typeof value === 'string' || typeof value === 'number';
+        })();
         const effectiveTagOverride = (() => {
+          const baseTag = payloadViewTag ?? tagOverride;
           if (useChild) {
-            return availableTags.length ? availableTags[0] : tagOverride;
+            return availableTags.length ? availableTags[0] : baseTag;
+          }
+          if (isTextComponent && hasTextStyleKeys && availableTags.length) {
+            return availableTags[0];
           }
           if (
             isTextComponent &&
@@ -851,37 +998,34 @@ export function BloomInspectorOverlayPanel() {
           ) {
             return availableTags[1];
           }
-          return tagOverride;
+          return baseTag;
         })();
 
-        const jsPayload = stripInternalKeys(nextProps, [
-          '__bloomInspectorUseChild',
-          '__bloomInspectorForceUIKit',
-        ]);
-
-        if (
-          jsApply &&
-          nextProps &&
-          typeof nextProps === 'object' &&
-          (!effectiveTagOverride || effectiveTagOverride == null)
-        ) {
-          if (__DEV__ && (DEBUG_LIVE_EDIT || debugEnabled('__bloomInspectorDebugLiveEdit'))) {
-            console.info('Bloom Inspector: live-edit using js apply', {
-              name: (jsInfo as any).name ?? null,
-              nativeTag: (jsInfo as any).nativeTag ?? null,
+        if (hasTextStyleKeys && runtimeApply && effectiveTagOverride != null) {
+          const runtimePayload = stripInternalKeys(nextProps, [
+            '__bloomInspectorUseChild',
+            '__bloomInspectorForceUIKit',
+          ]) as Record<string, unknown>;
+          setLiveEditStatus('Applying via JS runtime…');
+          Promise.resolve(runtimeApply(effectiveTagOverride, runtimePayload))
+            .then((result) => {
+              const ok = Boolean(result && (result as { ok?: boolean }).ok);
+              setLiveEditStatus(ok ? 'Applied' : 'Failed (runtime)');
+              if (__DEV__ && (DEBUG_LIVE_EDIT || debugEnabled('__bloomInspectorDebugLiveEdit'))) {
+                console.info('Bloom Inspector: live-edit runtime result', {
+                  ok,
+                  result,
+                  tagOverride: effectiveTagOverride,
+                });
+              }
+            })
+            .catch((error) => {
+              setLiveEditStatus(`Failed (${String(error)})`);
+              if (__DEV__ && (DEBUG_LIVE_EDIT || debugEnabled('__bloomInspectorDebugLiveEdit'))) {
+                console.warn('Bloom Inspector: live-edit runtime threw', { error: String(error) });
+              }
             });
-          }
-          const ok = Boolean(jsApply(jsPayload));
-          setLiveEditStatus(ok ? 'Applied' : 'Failed (no target)');
-          setLiveEditLastResult({
-            ok,
-            mode: (jsInfo as any).mode ?? 'ref',
-            reactTag: (jsInfo as any).nativeTag ?? undefined,
-            componentViewClass: (jsInfo as any).name ?? undefined,
-          });
-          if (ok) {
-            return;
-          }
+          return;
         }
 
         if (nativeApply && nextProps && typeof nextProps === 'object') {
@@ -891,9 +1035,13 @@ export function BloomInspectorOverlayPanel() {
           const forceUIKit =
             '__bloomInspectorForceUIKit' in (nextProps as Record<string, unknown>) &&
             Boolean((nextProps as Record<string, unknown>).__bloomInspectorForceUIKit);
-          const nativePayload = stripInternalKeys(nextProps, ['__bloomInspectorUseChild']);
-          const normalizedProps = forceUIKit
-            ? nativePayload
+          const needsUIKit =
+            forceUIKit || (isTextComponent && (hasTextStyleKeys || hasTextOverride));
+          const nativePayload = stripInternalKeys(nextProps, [
+            '__bloomInspectorUseChild',
+          ]) as Record<string, unknown>;
+          const normalizedProps = needsUIKit
+            ? { ...nativePayload, __bloomInspectorForceUIKit: true }
             : normalizePropsForNativeApply(nativePayload);
           const applyPromise =
             effectiveTagOverride != null && nativeApplyToTag
@@ -923,28 +1071,9 @@ export function BloomInspectorOverlayPanel() {
             });
           return;
         }
-        if (!jsApply) {
-          setLiveEditStatus('Unavailable (no runtime hook)');
-          if (__DEV__ && (DEBUG_LIVE_EDIT || debugEnabled('__bloomInspectorDebugLiveEdit'))) {
-            console.warn('Bloom Inspector: live-edit missing runtime hook');
-          }
-          return;
-        }
+        setLiveEditStatus('Unavailable (native module missing)');
         if (__DEV__ && (DEBUG_LIVE_EDIT || debugEnabled('__bloomInspectorDebugLiveEdit'))) {
-          console.info('Bloom Inspector: live-edit apply', {
-            nextPropsType: typeof nextProps,
-            nextProps,
-            keys:
-              nextProps && typeof nextProps === 'object'
-                ? Object.keys(nextProps as any).slice(0, 12)
-                : null,
-          });
-        }
-        const ok = jsApply(nextProps);
-        setLiveEditStatus(ok ? 'Applied' : 'Failed (no target)');
-        setLiveEditLastResult({ ok, mode: jsInfo?.mode ?? undefined });
-        if (__DEV__ && (DEBUG_LIVE_EDIT || debugEnabled('__bloomInspectorDebugLiveEdit'))) {
-          console.info('Bloom Inspector: live-edit result', { ok });
+          console.warn('Bloom Inspector: live-edit missing native module');
         }
       } catch (error) {
         setLiveEditStatus(`Failed (${String(error)})`);
@@ -953,7 +1082,7 @@ export function BloomInspectorOverlayPanel() {
         }
       }
     },
-    [debugEnabled, liveEditTargetIndex, liveEditTargetInfo]
+    [debugEnabled, liveEditTargetIndex, liveEditTargetInfo, payload]
   );
 
   const parseJson = useCallback((value: string) => {
@@ -1001,11 +1130,7 @@ export function BloomInspectorOverlayPanel() {
               info && typeof info === 'object' && 'componentViewClass' in (info as any)
                 ? ((info as any).componentViewClass as string | null | undefined)
                 : null;
-            if (tags.length > 1 && componentClass && componentClass.includes('Paragraph')) {
-              setLiveEditTargetIndex(1);
-            } else {
-              setLiveEditTargetIndex(0);
-            }
+            setLiveEditTargetIndex(0);
             if (__DEV__ && (DEBUG_LIVE_EDIT || debugEnabled('__bloomInspectorDebugLiveEdit'))) {
               console.info('Bloom Inspector: live-edit target info (native)', info ?? null);
             }
@@ -1045,6 +1170,57 @@ export function BloomInspectorOverlayPanel() {
       }
     }
   }, [activeTab, debugEnabled, payload]);
+
+  const componentClass =
+    liveEditTargetInfo && 'componentViewClass' in liveEditTargetInfo
+      ? liveEditTargetInfo.componentViewClass
+      : null;
+  const isTextComponent =
+    typeof componentClass === 'string' &&
+    (componentClass.includes('Paragraph') || componentClass.includes('Text'));
+  const showTextControls = isTextComponent || !componentClass;
+  const showViewControls = !isTextComponent;
+  const isTouchableHighlight = useMemo(() => {
+    if (!payload) {
+      return false;
+    }
+    const stack = typeof payload.componentStack === 'string' ? payload.componentStack : '';
+    if (stack && /TouchableHighlight/i.test(stack)) {
+      return true;
+    }
+    const hierarchy = Array.isArray(payload.hierarchy) ? payload.hierarchy : [];
+    return hierarchy.some(
+      (item) =>
+        item &&
+        typeof item === 'object' &&
+        typeof (item as { name?: string }).name === 'string' &&
+        /TouchableHighlight/i.test((item as { name?: string }).name ?? '')
+    );
+  }, [payload]);
+
+  const payloadText = useMemo(() => {
+    const candidate =
+      payload?.props?.children ??
+      payload?.props?.text ??
+      payload?.props?.title ??
+      payload?.props?.value;
+    const fromProps = extractTextFromProp(candidate);
+    if (fromProps) {
+      return fromProps;
+    }
+    const nativeText =
+      liveEditTargetInfo && typeof (liveEditTargetInfo as any).text === 'string'
+        ? ((liveEditTargetInfo as any).text as string)
+        : '';
+    return nativeText;
+  }, [liveEditTargetInfo, payload?.props]);
+
+  useEffect(() => {
+    if (activeTab !== 'edit') {
+      return;
+    }
+    setQuickTextValue(payloadText);
+  }, [activeTab, payloadText]);
 
   const handleOpenInEditor = useCallback(() => {
     const source = payload?.ownerSource ?? payload?.source;
@@ -1333,25 +1509,18 @@ export function BloomInspectorOverlayPanel() {
                   style={[styles.tabChip, activeTab === 'edit' && styles.tabChipActive]}>
                   <Text style={styles.tabText}>Edit</Text>
                 </Pressable>
-                <Pressable
-                  onPress={() => setActiveTab('raw')}
-                  style={[styles.tabChip, activeTab === 'raw' && styles.tabChipActive]}>
-                  <Text style={styles.tabText}>Raw</Text>
-                </Pressable>
               </View>
 
               {activeTab === 'overview' && (
                 <>
-                  <View style={styles.sectionHeaderRow}>
-                    <Text style={styles.sectionTitleInline}>React Stack</Text>
-                    <Pressable
-                      onPress={() => setShowFullStack((value) => !value)}
-                      style={[styles.toggleChip, showFullStack && styles.toggleChipActive]}>
-                      <Text style={styles.toggleText}>{showFullStack ? 'Full' : 'Short'}</Text>
-                    </Pressable>
-                  </View>
-                  {displayedStackParts.length ? (
-                    <Text style={styles.sectionBody}>{displayedStackParts.join(' > ')}</Text>
+                  <Text style={styles.sectionTitle}>Frame</Text>
+                  {payload.frame ? (
+                    <Text style={styles.sectionBody}>
+                      {`x: ${payload.frame.left.toFixed(1)}, y: ${payload.frame.top.toFixed(1)}, `}
+                      {`w: ${payload.frame.width.toFixed(1)}, h: ${payload.frame.height.toFixed(
+                        1
+                      )}`}
+                    </Text>
                   ) : (
                     <Text style={styles.sectionBody}>Unavailable</Text>
                   )}
@@ -1365,14 +1534,16 @@ export function BloomInspectorOverlayPanel() {
                     <Text style={styles.sectionBody}>Unavailable</Text>
                   )}
 
-                  <Text style={styles.sectionTitle}>Frame</Text>
-                  {payload.frame ? (
-                    <Text style={styles.sectionBody}>
-                      {`x: ${payload.frame.left.toFixed(1)}, y: ${payload.frame.top.toFixed(1)}, `}
-                      {`w: ${payload.frame.width.toFixed(1)}, h: ${payload.frame.height.toFixed(
-                        1
-                      )}`}
-                    </Text>
+                  <View style={styles.sectionHeaderRow}>
+                    <Text style={styles.sectionTitleInline}>React Stack</Text>
+                    <Pressable
+                      onPress={() => setShowFullStack((value) => !value)}
+                      style={[styles.toggleChip, showFullStack && styles.toggleChipActive]}>
+                      <Text style={styles.toggleText}>{showFullStack ? 'Full' : 'Short'}</Text>
+                    </Pressable>
+                  </View>
+                  {displayedStackParts.length ? (
+                    <Text style={styles.sectionBody}>{displayedStackParts.join(' > ')}</Text>
                   ) : (
                     <Text style={styles.sectionBody}>Unavailable</Text>
                   )}
@@ -1387,6 +1558,18 @@ export function BloomInspectorOverlayPanel() {
                       <Text style={styles.badgeText}>{sourceKindLabel}</Text>
                     ) : null}
                     <Pressable
+                      onPress={() =>
+                        setSnippetTheme((value) => (value === 'dark' ? 'light' : 'dark'))
+                      }
+                      style={[
+                        styles.toggleChip,
+                        snippetTheme === 'dark' && styles.toggleChipActive,
+                      ]}>
+                      <Text style={styles.toggleText}>
+                        {snippetTheme === 'dark' ? 'Dark' : 'Light'}
+                      </Text>
+                    </Pressable>
+                    <Pressable
                       onPress={() => setShowRawSource((value) => !value)}
                       style={[styles.toggleChip, showRawSource && styles.toggleChipActive]}>
                       <Text style={styles.toggleText}>{showRawSource ? 'Raw' : 'Short'}</Text>
@@ -1399,15 +1582,55 @@ export function BloomInspectorOverlayPanel() {
                         <Text style={styles.sectionHint}>Component: {componentSourceLabel}</Text>
                       ) : null}
                       {snippetLines.length ? (
-                        <View style={styles.snippetContainer}>
+                        <View
+                          style={[
+                            styles.snippetContainer,
+                            snippetTheme === 'dark' && styles.snippetContainerDark,
+                          ]}>
                           {snippetLines.map((line) => (
                             <Text
                               key={line.lineNumber}
                               style={[
                                 styles.snippetLine,
-                                line.isCurrent && styles.snippetLineCurrent,
+                                snippetTheme === 'dark' && styles.snippetLineDark,
+                                line.isCurrent &&
+                                  (snippetTheme === 'dark'
+                                    ? styles.snippetLineCurrentDark
+                                    : styles.snippetLineCurrent),
                               ]}>
-                              {line.text}
+                              {tokenizeHighlightLine(line.text).map((token, index) => {
+                                const style =
+                                  token.kind === 'keyword'
+                                    ? snippetTheme === 'dark'
+                                      ? styles.snippetTokenKeywordDark
+                                      : styles.snippetTokenKeyword
+                                    : token.kind === 'string'
+                                      ? snippetTheme === 'dark'
+                                        ? styles.snippetTokenStringDark
+                                        : styles.snippetTokenString
+                                      : token.kind === 'number'
+                                        ? snippetTheme === 'dark'
+                                          ? styles.snippetTokenNumberDark
+                                          : styles.snippetTokenNumber
+                                        : token.kind === 'comment'
+                                          ? snippetTheme === 'dark'
+                                            ? styles.snippetTokenCommentDark
+                                            : styles.snippetTokenComment
+                                          : token.kind === 'tag'
+                                            ? snippetTheme === 'dark'
+                                              ? styles.snippetTokenTagDark
+                                              : styles.snippetTokenTag
+                                            : token.kind === 'punct'
+                                              ? snippetTheme === 'dark'
+                                                ? styles.snippetTokenPunctDark
+                                                : styles.snippetTokenPunct
+                                              : undefined;
+                                return (
+                                  <Text key={`${line.lineNumber}-${index}`} style={style}>
+                                    {token.text}
+                                  </Text>
+                                );
+                              })}
                             </Text>
                           ))}
                         </View>
@@ -1459,6 +1682,26 @@ export function BloomInspectorOverlayPanel() {
                       ) : null}
                       {!canOpenInEditor ? (
                         <Text style={styles.sectionHint}>Open in editor unavailable.</Text>
+                      ) : null}
+                      <View style={styles.sectionHeaderRow}>
+                        <Text style={styles.sectionTitleInline}>Payload</Text>
+                        <Pressable
+                          onPress={() => setShowRawPayload((value) => !value)}
+                          style={[styles.toggleChip, showRawPayload && styles.toggleChipActive]}>
+                          <Text style={styles.toggleText}>{showRawPayload ? 'Hide' : 'Show'}</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() =>
+                            copyToClipboard(JSON.stringify(payload, null, 2), 'payload')
+                          }
+                          style={styles.inlineActionButton}>
+                          <Text style={styles.inlineActionText}>Copy</Text>
+                        </Pressable>
+                      </View>
+                      {showRawPayload ? (
+                        <Text style={styles.rawBody}>
+                          {JSON.stringify(payload, null, 2) ?? String(payload)}
+                        </Text>
                       ) : null}
                     </>
                   ) : (
@@ -1571,12 +1814,134 @@ export function BloomInspectorOverlayPanel() {
               {activeTab === 'edit' && (
                 <>
                   <View style={styles.sectionHeaderRow}>
-                    <Text style={styles.sectionTitleInline}>Live Edit</Text>
-                    <Text style={styles.badgeText}>Experimental</Text>
+                    <Text style={styles.sectionTitleInline}>Quick Style</Text>
+                  </View>
+                  <Text style={styles.sectionHint}>Applies native props to the selected view.</Text>
+                  {showViewControls ? (
+                    <View style={styles.quickRow}>
+                      <Text style={styles.sectionHint}>View background</Text>
+                      <View style={styles.colorSwatchRow}>
+                        {QUICK_COLORS.map((color) => (
+                          <Pressable
+                            key={color}
+                            onPress={() => setQuickViewColor(color)}
+                            style={[
+                              styles.colorSwatch,
+                              { backgroundColor: color },
+                              quickViewColor === color && styles.colorSwatchSelected,
+                            ]}
+                          />
+                        ))}
+                      </View>
+                      <View style={styles.quickRowInline}>
+                        <TextInput
+                          value={quickViewColor}
+                          onChangeText={setQuickViewColor}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          placeholder="#ff0000"
+                          style={styles.quickColorInput}
+                        />
+                        <Pressable
+                          onPress={() => {
+                            const props = isTouchableHighlight
+                              ? {
+                                  underlayColor: quickViewColor,
+                                  style: { backgroundColor: quickViewColor, opacity: 0.8 },
+                                  __bloomInspectorForceUIKit: true,
+                                }
+                              : {
+                                  style: { backgroundColor: quickViewColor, opacity: 0.8 },
+                                  __bloomInspectorForceUIKit: true,
+                                };
+                            setLiveEditStatus('Applying native…');
+                            setLiveEditJson(JSON.stringify(props, null, 2));
+                            applyNativeProps(props);
+                          }}
+                          style={styles.inlineActionButtonPrimary}>
+                          <Text style={styles.inlineActionTextPrimary}>Apply</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ) : null}
+                  {showTextControls ? (
+                    <View style={styles.quickRow}>
+                      <Text style={styles.sectionHint}>Text styles</Text>
+                      <View style={styles.colorSwatchRow}>
+                        {QUICK_COLORS.map((color) => (
+                          <Pressable
+                            key={`text-${color}`}
+                            onPress={() => setQuickTextColor(color)}
+                            style={[
+                              styles.colorSwatch,
+                              { backgroundColor: color },
+                              quickTextColor === color && styles.colorSwatchSelected,
+                            ]}
+                          />
+                        ))}
+                      </View>
+                      <View style={styles.quickRowInline}>
+                        <TextInput
+                          value={quickTextColor}
+                          onChangeText={setQuickTextColor}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          placeholder="#ff0000"
+                          style={styles.quickColorInput}
+                        />
+                        <View style={styles.alignToggleRow}>
+                          {(['left', 'center', 'right'] as const).map((align) => (
+                            <Pressable
+                              key={align}
+                              onPress={() => setQuickTextAlign(align)}
+                              style={[
+                                styles.toggleChip,
+                                quickTextAlign === align && styles.toggleChipActive,
+                              ]}>
+                              <Text style={styles.toggleText}>{align}</Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                        <Pressable
+                          onPress={() => setQuickUnderline((prev) => !prev)}
+                          style={[styles.toggleChip, quickUnderline && styles.toggleChipActive]}>
+                          <Text style={styles.toggleText}>
+                            {quickUnderline ? 'Underline on' : 'Underline off'}
+                          </Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() =>
+                            (() => {
+                              const style = {
+                                color: quickTextColor,
+                                textAlign: quickTextAlign,
+                                textDecorationLine: quickUnderline ? 'underline' : 'none',
+                              };
+                              const fallbackText = payloadText ?? undefined;
+                              const props = {
+                                style,
+                                __bloomInspectorForceUIKit: true,
+                                ...(fallbackText
+                                  ? { __bloomInspectorFallbackText: fallbackText }
+                                  : null),
+                              };
+                              setLiveEditStatus('Applying native…');
+                              setLiveEditJson(JSON.stringify(props, null, 2));
+                              applyNativeProps(props);
+                            })()
+                          }
+                          style={styles.inlineActionButtonPrimary}>
+                          <Text style={styles.inlineActionTextPrimary}>Apply</Text>
+                        </Pressable>
+                      </View>
+                      {/* Text override disabled for now */}
+                    </View>
+                  ) : null}
+                  <View style={styles.sectionHeaderRow}>
+                    <Text style={styles.sectionTitleInline}>Advanced JSON</Text>
                   </View>
                   <Text style={styles.sectionHint}>
-                    Applies `setNativeProps` to the last selected native view. This changes visuals
-                    but does not update React state.
+                    Applies raw props via the native updater (no React state change).
                   </Text>
                   {liveEditTargetInfo ? (
                     <Text style={styles.sectionHint}>
@@ -1589,7 +1954,9 @@ export function BloomInspectorOverlayPanel() {
                       {liveEditTargetInfo.hasTarget && 'reactTag' in liveEditTargetInfo
                         ? ` #${liveEditTargetInfo.reactTag ?? '?'}`
                         : ''}
-                      {liveEditTargetInfo.reason ? ` · ${liveEditTargetInfo.reason}` : ''}
+                      {'reason' in liveEditTargetInfo && liveEditTargetInfo.reason
+                        ? ` · ${liveEditTargetInfo.reason}`
+                        : ''}
                     </Text>
                   ) : null}
                   {liveEditTargetInfo && 'availableTags' in liveEditTargetInfo ? (
@@ -1614,128 +1981,86 @@ export function BloomInspectorOverlayPanel() {
                       </Pressable>
                     </View>
                   ) : null}
-                  {liveEditLastResult && typeof liveEditLastResult === 'object' ? (
-                    <>
-                      <Text style={styles.sectionHint}>
-                        Result: {liveEditLastResult.ok ? 'ok' : 'failed'}
-                        {liveEditLastResult.mode ? ` · ${liveEditLastResult.mode}` : ''}
-                        {liveEditLastResult.reactTag != null
-                          ? ` · tag ${liveEditLastResult.reactTag}`
-                          : ''}
-                        {liveEditLastResult.componentViewClass
-                          ? ` · ${liveEditLastResult.componentViewClass}`
-                          : ''}
-                      </Text>
-                      {liveEditLastResult.componentViewFrame ? (
-                        <Text style={styles.sectionHint}>
-                          Frame: {formatRect(liveEditLastResult.componentViewFrame)}
-                        </Text>
-                      ) : null}
-                      {liveEditLastResult.componentViewBounds ? (
-                        <Text style={styles.sectionHint}>
-                          Bounds: {formatRect(liveEditLastResult.componentViewBounds)}
-                        </Text>
-                      ) : null}
-                      {liveEditLastResult.componentViewAlpha != null ||
-                      liveEditLastResult.componentViewHidden != null ? (
-                        <Text style={styles.sectionHint}>
-                          Alpha:{' '}
-                          {liveEditLastResult.componentViewAlpha != null
-                            ? liveEditLastResult.componentViewAlpha
-                            : '?'}{' '}
-                          Hidden:{' '}
-                          {liveEditLastResult.componentViewHidden != null
-                            ? String(liveEditLastResult.componentViewHidden)
-                            : '?'}
-                        </Text>
-                      ) : null}
-                      {liveEditLastResult.componentViewBackgroundColor ? (
-                        <Text style={styles.sectionHint}>
-                          Background: {liveEditLastResult.componentViewBackgroundColor}
-                        </Text>
-                      ) : null}
-                    </>
-                  ) : null}
-                  <TextInput
-                    style={styles.liveEditInput}
-                    value={liveEditJson}
-                    onChangeText={(text) => {
-                      setLiveEditJson(text);
-                      setLiveEditStatus(null);
-                    }}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    multiline
-                    placeholder={'{\n  "backgroundColor": "red"\n}'}
-                    placeholderTextColor="#7a7a7a"
-                  />
-                  {liveEditStatus ? (
-                    <Text style={styles.sectionHint}>Status: {liveEditStatus}</Text>
-                  ) : null}
                   <View style={styles.inlineActionsRow}>
                     <Pressable
-                      onPress={() => {
-                        const parsed = parseJson(liveEditJson);
-                        if (!parsed.ok) {
-                          setLiveEditStatus(parsed.error);
-                          return;
-                        }
-                        if (__DEV__ && debugEnabled('__bloomInspectorDebugLiveEdit')) {
-                          console.info('Bloom Inspector: live-edit apply style parsed', {
-                            raw: liveEditJson,
-                            parsed: parsed.value,
-                          });
-                        }
-                        applyNativeProps({ style: parsed.value });
-                      }}
-                      style={styles.inlineActionButtonPrimary}>
-                      <Text style={styles.inlineActionTextPrimary}>Apply style</Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={() => {
-                        const parsed = parseJson(liveEditJson);
-                        if (!parsed.ok) {
-                          setLiveEditStatus(parsed.error);
-                          return;
-                        }
-                        if (__DEV__ && debugEnabled('__bloomInspectorDebugLiveEdit')) {
-                          console.info('Bloom Inspector: live-edit apply props parsed', {
-                            raw: liveEditJson,
-                            parsed: parsed.value,
-                          });
-                        }
-                        if (looksLikeStyleObject(parsed.value)) {
-                          setLiveEditStatus('Applying as style…');
-                          if (__DEV__ && debugEnabled('__bloomInspectorDebugLiveEdit')) {
-                            console.info('Bloom Inspector: live-edit interpreted props as style', {
-                              keys: Object.keys(parsed.value),
-                            });
-                          }
-                          applyNativeProps({ style: parsed.value });
-                          return;
-                        }
-                        applyNativeProps(parsed.value);
-                      }}
+                      onPress={() => setShowAdvancedEdit((prev) => !prev)}
                       style={styles.inlineActionButton}>
-                      <Text style={styles.inlineActionText}>Apply props</Text>
+                      <Text style={styles.inlineActionText}>
+                        {showAdvancedEdit ? 'Hide advanced' : 'Advanced JSON'}
+                      </Text>
                     </Pressable>
                   </View>
-                </>
-              )}
-
-              {activeTab === 'raw' && (
-                <>
-                  <View style={styles.sectionHeaderRow}>
-                    <Text style={styles.sectionTitleInline}>Payload</Text>
-                    <Pressable
-                      onPress={() => copyToClipboard(JSON.stringify(payload, null, 2), 'payload')}
-                      style={styles.inlineActionButton}>
-                      <Text style={styles.inlineActionText}>Copy</Text>
-                    </Pressable>
-                  </View>
-                  <Text style={styles.rawBody}>
-                    {JSON.stringify(payload, null, 2) ?? String(payload)}
-                  </Text>
+                  {showAdvancedEdit ? (
+                    <>
+                      <TextInput
+                        style={styles.liveEditInput}
+                        value={liveEditJson}
+                        onChangeText={(text) => {
+                          setLiveEditJson(text);
+                          setLiveEditStatus(null);
+                        }}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        multiline
+                        placeholder={'{\n  "backgroundColor": "red"\n}'}
+                        placeholderTextColor="#7a7a7a"
+                      />
+                      {liveEditStatus ? (
+                        <Text style={styles.sectionHint}>Status: {liveEditStatus}</Text>
+                      ) : null}
+                      <View style={styles.inlineActionsRow}>
+                        <Pressable
+                          onPress={() => {
+                            const parsed = parseJson(liveEditJson);
+                            if (!parsed.ok) {
+                              setLiveEditStatus(parsed.error);
+                              return;
+                            }
+                            if (__DEV__ && debugEnabled('__bloomInspectorDebugLiveEdit')) {
+                              console.info('Bloom Inspector: live-edit apply style parsed', {
+                                raw: liveEditJson,
+                                parsed: parsed.value,
+                              });
+                            }
+                            applyNativeProps({ style: parsed.value });
+                          }}
+                          style={styles.inlineActionButtonPrimary}>
+                          <Text style={styles.inlineActionTextPrimary}>Apply style</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => {
+                            const parsed = parseJson(liveEditJson);
+                            if (!parsed.ok) {
+                              setLiveEditStatus(parsed.error);
+                              return;
+                            }
+                            if (__DEV__ && debugEnabled('__bloomInspectorDebugLiveEdit')) {
+                              console.info('Bloom Inspector: live-edit apply props parsed', {
+                                raw: liveEditJson,
+                                parsed: parsed.value,
+                              });
+                            }
+                            if (looksLikeStyleObject(parsed.value)) {
+                              setLiveEditStatus('Applying as style…');
+                              if (__DEV__ && debugEnabled('__bloomInspectorDebugLiveEdit')) {
+                                console.info(
+                                  'Bloom Inspector: live-edit interpreted props as style',
+                                  {
+                                    keys: Object.keys(parsed.value),
+                                  }
+                                );
+                              }
+                              applyNativeProps({ style: parsed.value });
+                              return;
+                            }
+                            applyNativeProps(parsed.value);
+                          }}
+                          style={styles.inlineActionButton}>
+                          <Text style={styles.inlineActionText}>Apply props</Text>
+                        </Pressable>
+                      </View>
+                    </>
+                  ) : null}
                 </>
               )}
             </ScrollView>
@@ -1773,6 +2098,22 @@ function formatValue(value: unknown): string {
   }
 }
 
+function extractTextFromProp(value: unknown): string {
+  if (value == null) {
+    return '';
+  }
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => extractTextFromProp(entry))
+      .filter(Boolean)
+      .join('');
+  }
+  return '';
+}
+
 function isFiberNode(name: string): boolean {
   return /^Fiber\(\d+\)$/.test(name);
 }
@@ -1786,9 +2127,6 @@ function isHostHierarchyName(name: string): boolean {
     return true;
   }
   if (isFiberNode(name)) {
-    return true;
-  }
-  if (name === 'View' || name === 'Text' || name === 'Image' || name === 'ScrollView') {
     return true;
   }
   return /^(RCT|UI|RN|RNC)/.test(name);
@@ -1858,6 +2196,38 @@ function isNoisyStackName(name: string): boolean {
     return true;
   }
   return false;
+}
+
+function isLeafishStackName(name: string): boolean {
+  if (!name) {
+    return false;
+  }
+  return (
+    name === 'Text' ||
+    name === 'View' ||
+    name === 'Image' ||
+    name === 'ScrollView' ||
+    name === 'TextInput' ||
+    name === 'Pressable' ||
+    name === 'TouchableOpacity' ||
+    name === 'TouchableHighlight' ||
+    name === 'TouchableWithoutFeedback' ||
+    name === 'Touchable'
+  );
+}
+
+function isRootishStackName(name: string): boolean {
+  if (!name) {
+    return false;
+  }
+  return (
+    name === 'App' ||
+    name === 'Root' ||
+    name === 'RootContainer' ||
+    name === 'NavigationContainer' ||
+    name.endsWith('Screen') ||
+    name.endsWith('Navigator')
+  );
 }
 
 function getComponentNameFromComponentStackLine(line: string): string {
@@ -2237,17 +2607,17 @@ const styles = StyleSheet.create({
     color: '#555',
   },
   content: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 8,
   },
   contentContainer: {
-    paddingVertical: 10,
-    gap: 6,
+    paddingVertical: 6,
+    gap: 3,
   },
   tabRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 6,
-    marginBottom: 6,
+    marginBottom: 4,
   },
   tabChip: {
     borderRadius: 999,
@@ -2333,10 +2703,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     gap: 2,
   },
+  snippetContainerDark: {
+    backgroundColor: '#0f1117',
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
   snippetLine: {
     fontSize: 11,
     color: '#222',
     fontFamily: 'Menlo',
+  },
+  snippetLineDark: {
+    color: '#e6e6e6',
   },
   snippetLineCurrent: {
     backgroundColor: 'rgba(255, 230, 150, 0.6)',
@@ -2345,9 +2722,94 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     paddingVertical: 1,
   },
+  snippetLineCurrentDark: {
+    backgroundColor: 'rgba(124, 77, 255, 0.2)',
+    borderRadius: 6,
+    overflow: 'hidden',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+  },
+  snippetTokenKeyword: {
+    color: '#7c4dff',
+  },
+  snippetTokenKeywordDark: {
+    color: '#b388ff',
+  },
+  snippetTokenString: {
+    color: '#d17b46',
+  },
+  snippetTokenStringDark: {
+    color: '#f5a97f',
+  },
+  snippetTokenNumber: {
+    color: '#ff8f00',
+  },
+  snippetTokenNumberDark: {
+    color: '#ffd166',
+  },
+  snippetTokenComment: {
+    color: '#7a7a7a',
+  },
+  snippetTokenCommentDark: {
+    color: '#7f8c9a',
+  },
+  snippetTokenTag: {
+    color: '#00b0ff',
+  },
+  snippetTokenTagDark: {
+    color: '#7dd3fc',
+  },
+  snippetTokenPunct: {
+    color: '#7f8c9a',
+  },
+  snippetTokenPunctDark: {
+    color: '#cbd5e1',
+  },
   sectionHint: {
     fontSize: 11,
     color: '#666',
+  },
+  quickRow: {
+    marginTop: 8,
+    gap: 6,
+  },
+  quickRowInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  colorSwatchRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  colorSwatch: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.2)',
+  },
+  colorSwatchSelected: {
+    borderColor: '#111',
+    borderWidth: 2,
+  },
+  quickColorInput: {
+    minWidth: 90,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 11,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    color: '#111',
+  },
+  alignToggleRow: {
+    flexDirection: 'row',
+    gap: 6,
+    flexWrap: 'wrap',
   },
   toggleRow: {
     flexDirection: 'row',

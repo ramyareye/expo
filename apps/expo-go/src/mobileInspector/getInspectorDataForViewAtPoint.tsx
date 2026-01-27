@@ -31,9 +31,12 @@ if (!reactDevToolsHook) {
   );
 }
 
-const renderers: ReactRenderer[] = reactDevToolsHook
-  ? Array.from(reactDevToolsHook.renderers.values())
-  : [];
+const renderers: ReactRenderer[] =
+  reactDevToolsHook &&
+  reactDevToolsHook.renderers &&
+  typeof reactDevToolsHook.renderers.values === 'function'
+    ? Array.from(reactDevToolsHook.renderers.values())
+    : [];
 
 const DEBUG_BLOOM_LOGS = false;
 

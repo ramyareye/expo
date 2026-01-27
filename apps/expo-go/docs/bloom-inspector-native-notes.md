@@ -29,8 +29,17 @@ For a presentation-friendly, end-to-end walkthrough, see `docs/bloom-inspector-o
 ### 4) Fallback native-only data
 - When React inspector data isn’t available, native view info is sent:
   - class chain, frame, basic props (alpha/hidden/userInteractionEnabled, accessibility, reactTag if present).
-  - Note: the native fallback path is currently guarded by `kBloomInspectorEnableNativeFallback` in
-    `ios/Exponent/Versioned/Core/EXBloomInspectorManager.mm` (default is `NO`).
+- Note: the native fallback path is currently guarded by `kBloomInspectorEnableNativeFallback` in
+  `ios/Exponent/Versioned/Core/EXBloomInspectorManager.mm` (currently `YES`).
+
+### 5) Live Edit bridge (native)
+- **File:** `ios/Exponent/Versioned/Core/EXBloomInspectorManager.mm`
+- Added `applyNativePropsAsync` (native path).
+- The **default UX** uses the native path for **View** updates (Fabric `synchronouslyUpdateViewOnUIThread`
+  + UIKit fallback).
+- **Text styles** (color/align/underline) are now routed through the **JS runtime override**
+  (`applyLiveEditToAppAsync`) so Fabric can recompute the attributed string.
+- **Text content override is disabled** in the UI for now.
 
 ## Current JS panel (overlay UI)
 
@@ -55,18 +64,6 @@ React inspector payloads are generated in JS and sent to the overlay via
   and `getReactMetadataFromViewData`.
 - The sanitized payload includes `componentStack`, `source`, `hierarchy`,
   and `props`, tagged with `payloadSource: 'js'`.
-
-## Next steps (recommended)
-
-### A) Verify JS-first rendering in the panel
-- Ensure the overlay panel renders JS payloads (React stack/source/props) when present.
-- Keep native-only payload as fallback when JS is unavailable.
-
-### B) Decide on native fallback timing
-- The fallback timing constants live in `ios/Exponent/Versioned/Core/EXBloomInspectorManager.mm`:
-  - `kBloomInspectorFallbackDelaySeconds` (currently `0.05`)
-  - `kBloomInspectorSuppressWindowSeconds` (currently `1.0`)
-- Note: the fallback is disabled by default via `kBloomInspectorEnableNativeFallback = NO`.
 
 ## Progress updates (latest)
 
@@ -109,28 +106,31 @@ React inspector payloads are generated in JS and sent to the overlay via
 - **Logs:** native Bloom logs are disabled by default (`kBloomInspectorDebugLogs = NO`); JS files
   contain local debug flags (`DEBUG_BLOOM_LOGS`, `DEBUG_OPEN_IN_EDITOR`) which are off by default.
 
-## Reference repos (notes only, no code pulled)
-
-- **react-native-dev-inspector** (JS-only)
-  - Uses RN internal `getInspectorDataForViewAtPoint` import paths (no native module).
-  - Filters hierarchy via skip lists (internal component names).
-  - Has “open in editor” via Metro middleware endpoint.
-  - Optional source inference from `testID` and `_debugSource`/`_debugOwner`.
-- **react-native-harness**
-  - Device test runner; not relevant for inspector pipeline.
-- **rozenite**
-  - DevTools plugin runtime in browser panels; not relevant for element picker overlay. 
-
 ## Latest UI additions (panel)
 
-- Tabs: Overview / Source / Hierarchy / Props / Edit / Raw.
+- Tabs: Overview / Source / Hierarchy / Props / Edit.
 - Toggle chips:
   - React Stack: Short / Full
   - Source: Short / Raw (Short shows basename)
   - Hierarchy: Fiber On / Off
 - Props: search + copy-to-clipboard.
-- Payload (Raw tab): copy-to-clipboard.
+- Payload (Source tab): toggle show/hide + copy-to-clipboard.
 - “Open in editor” uses the dev-server `/open-stack-frame` endpoint when available.
+- **Edit tab (Quick Style):** conditional controls based on component type.
+  - View: color swatches + hex input for background.
+  - Text: color swatches + hex input for text color, alignment toggles, underline toggle, and a
+    text-content input.
+  - Applies via native path.
+- **Advanced JSON:** collapsed by default; expands to the raw JSON editor + Apply buttons.
+
+## Live Edit behavior & limitations (current)
+
+- **Best‑effort only:** live edits do not update React state and can be overwritten on re-render.
+- **Text limitations:** Native/KVC updates on `RCTParagraphComponentView` are unreliable; Fabric
+  owns the attributed string and may ignore UIKit mutations.
+- **DevTools renderer availability:** the DevTools hook can report `renderers=0`, so `overrideProps`
+  cannot schedule a commit. This is why text styles use the JS runtime override path instead.
+- **Target drift:** some components resolve to parent/native wrappers (e.g. screen containers).
 
 ## Lifecycle (current flow)
 

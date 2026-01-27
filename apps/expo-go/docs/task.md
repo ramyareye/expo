@@ -47,7 +47,10 @@ Stack
 - Panel toggles: React Stack short/full, Source short/raw (basename vs full), Fiber on/off.
 - Source snippet uses Metro endpoint `/bloom-source-snippet` (served by Metro, typically `:8081`).
 - Bloom debug logs are gated off by default.
-- Live edit: view-level props (bg/opacity/border) work via native apply; text edits are unreliable in Fabric because `RCTParagraphComponentView` does not expose a UILabel/UITextView. UIKit/KVC text tweaks may be overwritten on next render. Text background is not supported.
+- Live edit: view-level props (bg/opacity/border) work via native apply.
+- Live edit (Text): styles (color/align/underline) now go through the JS runtime override path (`applyLiveEditToAppAsync`) so Fabric can recompute attributed strings.
+- Text content override is disabled in the UI for now.
+- Live edit changes can be overwritten on re-render (no React state update).
 
 ### Next steps
 
