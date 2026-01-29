@@ -37,7 +37,7 @@ Stack
 
 - [ ] Private GitHub repo + invite **sirian-m**.
 - [ ] Screen recording of inspector flow.
-- [ ] Brief doc with implementation approach + challenges.
+- [x] Brief doc with implementation approach + challenges (`apps/expo-go/docs/bloom-inspector-presentation-brief.md`).
 
 ### Implementation notes (current state)
 

@@ -10,16 +10,19 @@ Props inspector
 Done (props list + search + copy in overlay panel).
 Code location (file + line)
 Done (prefers `__bloomSource`/`__source` when available; falls back to fiber debug source + symbolication).
-Next steps (ordered)
+Next steps (ordered) (post-presentation candidates)
 
 Confirm panel renders React hierarchy/source consistently across screens and routers.
+Status: deferred for presentation.
 Decide expected behavior for library/native components:
 - now supported via `ownerSource` heuristic (prefers nearest non-bundle, non-`node_modules` source; prefers `/apps/`).
 - decide when to prefer “usage site” vs component file, and how to present it in the UI.
+Status: deferred for presentation.
 
 Extract React component names/source when componentStack is empty.
-Status: pending.
+Status: deferred for presentation.
 Confirm source/line for common components
+Status: deferred for presentation.
 
 Verify source is present in payload (Babel jsx-source is on in dev).
 If missing, add fallback to show first line from componentStack.
@@ -36,10 +39,14 @@ Done (opens local `*.tsx` paths via `/open-stack-frame`; avoids `/symbolicate` w
 Delivery pipeline hardening (Option A)
 
 Forward JS inspector payload via `BloomInspector.sendPick` when `BloomInspectorOverlay` is missing (multi-runtime fix).
-Status: in progress.
+Status: deferred for presentation.
+Optional: show a toast when the overlay module is missing.
 Doc update
 
 Summarize final behavior + how to run and test (in your bloom-inspector-native-notes.md).
+Status: pending.
+Presentation brief doc (implementation approach + challenges).
+Status: done (`apps/expo-go/docs/bloom-inspector-presentation-brief.md`).
 Optional/bonus
 
 Better hierarchy formatting
@@ -74,3 +81,4 @@ source : https://github.com/facebook/hermes/blob/main/doc/ReactNativeIntegration
 Selection lifecycle
 - Done: toggling/closing clears selection.
 - Pending: handle stale selection after code changes / refresh (clear or reselect).
+Status: deferred for presentation.
