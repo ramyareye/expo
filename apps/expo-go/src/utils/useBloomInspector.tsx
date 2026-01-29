@@ -21,6 +21,13 @@ import type {
   InspectorViewData,
 } from 'src/mobileInspector/inspectorTypes';
 
+// Outline:
+// - Live-edit target resolution helpers
+// - Context + state for inspector overlay
+// - Native tap -> JS payload -> sendPick bridge
+// - In-app overlay UI + selection state
+
+// Resolve the best live-edit target from InspectorViewData.
 function storeLiveEditTargetFromViewData(viewData: InspectorViewData | null | undefined) {
   try {
     if (!viewData) {
