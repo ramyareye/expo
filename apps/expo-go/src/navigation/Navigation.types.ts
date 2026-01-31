@@ -26,3 +26,7 @@ export type DiagnosticsStackRoutes = {
   Location: object;
   Geofencing: object;
 };
+
+export type InspectorDemoStackRoutes = {
+  InspectorDemo: object;
+};

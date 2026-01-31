@@ -1,6 +1,7 @@
 import type { MetroConfig } from '@expo/metro/metro';
 import connect from 'connect';
 
+import { bloomSourceSnippetMiddleware } from './bloomSourceSnippetMiddleware';
 import { createEventsSocket } from './createEventSocket';
 import { createMessagesSocket } from './createMessageSocket';
 import { Log } from '../../../../log';
@@ -18,6 +19,9 @@ export function createMetroMiddleware(metroConfig: Pick<MetroConfig, 'projectRoo
     // Support opening stack frames from clients directly in the editor
     .use('/open-stack-frame', rawBodyMiddleware)
     .use('/open-stack-frame', metroOpenStackFrameMiddleware)
+    // Support showing small source snippets for inspector UIs
+    .use('/bloom-source-snippet', rawBodyMiddleware)
+    .use('/bloom-source-snippet', bloomSourceSnippetMiddleware(metroConfig))
     // Support the symbolication endpoint of Metro
     // See: https://github.com/facebook/metro/blob/a792d85ffde3c21c3fbf64ac9404ab0afe5ff957/packages/metro/src/Server.js#L1266
     .use('/symbolicate', rawBodyMiddleware)

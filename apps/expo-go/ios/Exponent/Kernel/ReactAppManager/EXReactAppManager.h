@@ -63,6 +63,7 @@ typedef enum EXReactAppManagerStatus {
  */
 - (void)togglePerformanceMonitor;
 - (void)toggleElementInspector;
+- (void)toggleBloomElementInspector;
 - (void)showDevMenu;
 
 /**

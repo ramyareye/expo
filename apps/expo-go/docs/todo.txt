@@ -1,0 +1,84 @@
+Here’s the current todo list based on the requirement checklist and where we are:
+
+Must‑have checklist
+
+Element picker toggle
+Done (Dev menu toggle works).
+Visual selection
+Done (pink highlight border).
+Props inspector
+Done (props list + search + copy in overlay panel).
+Code location (file + line)
+Done (prefers `__bloomSource`/`__source` when available; falls back to fiber debug source + symbolication).
+Next steps (ordered) (post-presentation candidates)
+
+Confirm panel renders React hierarchy/source consistently across screens and routers.
+Status: deferred for presentation.
+Decide expected behavior for library/native components:
+- now supported via `ownerSource` heuristic (prefers nearest non-bundle, non-`node_modules` source; prefers `/apps/`).
+- decide when to prefer “usage site” vs component file, and how to present it in the UI.
+Status: deferred for presentation.
+
+Extract React component names/source when componentStack is empty.
+Status: deferred for presentation.
+Confirm source/line for common components
+Status: deferred for presentation.
+
+Verify source is present in payload (Babel jsx-source is on in dev).
+If missing, add fallback to show first line from componentStack.
+Trim debug logs
+
+Gate verbose Bloom Log lines behind a local debug flag.
+Status: done (native + JS).
+Decide on fallback timing (native vs JS)
+
+Confirm whether to keep or remove the 0.2s native fallback delay (see EXBloomInspectorManager.mm).
+Open in editor action
+
+Done (opens local `*.tsx` paths via `/open-stack-frame`; avoids `/symbolicate` when `__bloomSource` is present).
+Delivery pipeline hardening (Option A)
+
+Forward JS inspector payload via `BloomInspector.sendPick` when `BloomInspectorOverlay` is missing (multi-runtime fix).
+Status: deferred for presentation.
+Optional: show a toast when the overlay module is missing.
+Doc update
+
+Summarize final behavior + how to run and test (in your bloom-inspector-native-notes.md).
+Status: pending.
+Presentation brief doc (implementation approach + challenges).
+Status: done (`apps/expo-go/docs/bloom-inspector-presentation-brief.md`).
+Optional/bonus
+
+Better hierarchy formatting
+Prop filters / search (done)
+Live prop editing via `setNativeProps` (experimental) (done)
+Opt-in save-to-source pipeline (Visual Editor server + AST updates + `data-editor-id`/Babel plugin) for persistent edits (requires app instrumentation).
+Live Edit (Text on Fabric):
+- Text styles now use the JS runtime override path (applyLiveEditToAppAsync). Keep an eye on renderer availability.
+- Text content override is disabled in the UI for now.
+Text background is not supported (Text draws inline); use color/underline/weight or parent View bg.
+Live Edit (prop persistence):
+- App-runtime/Fiber overrides are used for text styles only. View edits remain native (applyNativePropsAsync).
+AI research notes captured in `apps/expo-go/docs/research/bloom-inspector-ai-notes.md`.
+Source snippet if needed
+Improve snippet UI readability (background + padding + highlight current line). (done)
+Cleanup: disable debug flags by default (e.g. `DEBUG_SOURCE_SNIPPET`) once stable.
+Hermes custom build to enable bundle prelude execution (research later)
+Delivery pipeline (Option B, later)
+
+Make `BloomInspectorOverlay` module available in experience runtime so JS can call `BloomInspectorOverlay.sendPick` directly.
+If you want, I can start with step 1 now (React stack + source display).
+source : https://github.com/facebook/hermes/blob/main/doc/ReactNativeIntegration.md#using-a-custom-hermes-build-in-a-react-native-app
+
+ add this to bable ? // if (process.env.NODE_ENV === 'production') return; add this ?
+ 4. Consider JSXElement instead of JSXOpeningElement
+
+ cannot find source of this one (maybe cause its' in node_models) ? 
+ import { Button, ScrollView, StyleSheet, View, Text } from 'react-native'; <Button title="From asset" />
+
+ Limitation: elements with `pointerEvents="none"` aren’t selectable (e.g. `ComponentListScreen`).
+
+Selection lifecycle
+- Done: toggling/closing clears selection.
+- Pending: handle stale selection after code changes / refresh (clear or reselect).
+Status: deferred for presentation.

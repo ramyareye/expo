@@ -3,6 +3,7 @@
 #import <Foundation/Foundation.h>
 #import <React/RCTLog.h>
 #import <React/RCTBridge.h>
+@protocol RCTHostRuntimeDelegate;
 
 
 @class EXManifestsManifest;
@@ -22,6 +23,7 @@
 - (void)showDevMenuForHost:(id)host;
 - (void)togglePerformanceMonitorForHost:(id)host;
 - (void)toggleElementInspectorForHost:(id)host;
+- (void)toggleBloomElementInspectorForHost:(id)host;
 - (uint32_t)addWebSocketNotificationHandler:(void (^)(NSDictionary<NSString *, id> *))handler
                          queue:(dispatch_queue_t)queue
                      forMethod:(NSString *)method;
@@ -41,3 +43,5 @@
 - (Class)getModuleClassFromName:(const char *)name;
 
 @end
+
+FOUNDATION_EXTERN id<RCTHostRuntimeDelegate> EXGetBloomInspectorRuntimeDelegate(void);

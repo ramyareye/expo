@@ -11,8 +11,10 @@ import HomeApp from './src/HomeApp';
 import ApolloClient from './src/api/ApolloClient';
 import Store from './src/redux/Store';
 import './src/menu/DevMenuApp';
+import './src/mobileInspector/BloomInspectorOverlayApp';
 import { AccountNameProvider } from './src/utils/AccountNameContext';
 import { InitialDataProvider } from './src/utils/InitialDataContext';
+import { BloomInspectorProvider } from './src/utils/useBloomInspector';
 
 if (Platform.OS === 'android') {
   enableScreens(false);
@@ -30,9 +32,11 @@ export default function App() {
       <ReduxProvider store={Store}>
         <ApolloProvider client={ApolloClient}>
           <InitialDataProvider>
-            <AccountNameProvider>
-              <HomeApp />
-            </AccountNameProvider>
+            <BloomInspectorProvider>
+              <AccountNameProvider>
+                <HomeApp />
+              </AccountNameProvider>
+            </BloomInspectorProvider>
           </InitialDataProvider>
         </ApolloProvider>
       </ReduxProvider>

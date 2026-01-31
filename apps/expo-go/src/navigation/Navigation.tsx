@@ -3,6 +3,7 @@ import { NavigationContainer, useTheme, useNavigationContainerRef } from '@react
 import { createStackNavigator, TransitionPresets } from '@react-navigation/stack';
 import * as React from 'react';
 import { Platform, StyleSheet, Linking } from 'react-native';
+import { BloomInspectorScreenRoot } from 'src/utils/BloomInspectorScreenRoot';
 
 import BottomTab, { getNavigatorProps } from './BottomTabNavigator';
 import { HomeStackRoutes, SettingsStackRoutes, ModalStackRoutes } from './Navigation.types';
@@ -16,6 +17,7 @@ import { BranchListScreen } from '../screens/BranchListScreen';
 import { DiagnosticsStackScreen } from '../screens/DiagnosticsScreen';
 import { FeedbackFormScreen } from '../screens/FeedbackFormScreen';
 import { HomeScreen } from '../screens/HomeScreen';
+import { InspectorDemoStackScreen } from '../screens/InspectorDemoScreen';
 import { ProjectScreen } from '../screens/ProjectScreen';
 import { ProjectsListScreen } from '../screens/ProjectsListScreen';
 import QRCodeScreen from '../screens/QRCodeScreen';
@@ -121,6 +123,27 @@ function SettingsStackScreen() {
 
 const RootStack = createStackNavigator();
 
+function withBloomInspectorRoot<P>(Component: React.ComponentType<P>) {
+  function BloomInspectorWrapped(props: P) {
+    return (
+      <BloomInspectorScreenRoot style={styles.screenRoot}>
+        {/* @ts-ignore */}
+        <Component {...props} />
+      </BloomInspectorScreenRoot>
+    );
+  }
+
+  const componentName = Component.displayName ?? Component.name ?? 'Anonymous';
+  BloomInspectorWrapped.displayName = `BloomInspectorRoot(${componentName})`;
+
+  return BloomInspectorWrapped;
+}
+
+const HomeStackScreenWithInspector = withBloomInspectorRoot(HomeStackScreen);
+const SettingsStackScreenWithInspector = withBloomInspectorRoot(SettingsStackScreen);
+const DiagnosticsStackScreenWithInspector = withBloomInspectorRoot(DiagnosticsStackScreen);
+const InspectorDemoStackScreenWithInspector = withBloomInspectorRoot(InspectorDemoStackScreen);
+
 function TabNavigator(props: { theme: string }) {
   return (
     <BottomTab.Navigator
@@ -129,7 +152,7 @@ function TabNavigator(props: { theme: string }) {
       detachInactiveScreens={shouldDetachInactiveScreens}>
       <BottomTab.Screen
         name="HomeStack"
-        component={HomeStackScreen}
+        component={HomeStackScreenWithInspector}
         options={{
           tabBarIcon: (props: any) =>
             Platform.OS === 'ios' ? (
@@ -144,7 +167,7 @@ function TabNavigator(props: { theme: string }) {
       {Platform.OS === 'ios' && (
         <BottomTab.Screen
           name="DiagnosticsStack"
-          component={DiagnosticsStackScreen}
+          component={DiagnosticsStackScreenWithInspector}
           options={{
             tabBarIcon: (props: any) =>
               Platform.OS === 'ios' ? (
@@ -156,9 +179,21 @@ function TabNavigator(props: { theme: string }) {
           }}
         />
       )}
+
+      {Platform.OS === 'ios' && (
+        <BottomTab.Screen
+          name="InspectorStack"
+          component={InspectorDemoStackScreenWithInspector}
+          options={{
+            tabBarIcon: () => ({ sfSymbolName: 'ecg.text.page.fill' }),
+            tabBarLabel: 'Inspector',
+          }}
+        />
+      )}
+
       <BottomTab.Screen
         name="SettingsScreen"
-        component={SettingsStackScreen}
+        component={SettingsStackScreenWithInspector}
         options={{
           title: 'Settings',
           tabBarIcon: (props: any) =>
@@ -176,10 +211,28 @@ function TabNavigator(props: { theme: string }) {
 
 const ModalStack = createStackNavigator<ModalStackRoutes>();
 
+// function getActiveRoute(state: NavigationState | undefined): Route<string> {
+//   if (!state) {
+//     throw new Error('No navigation state');
+//   }
+
+//   let currentState: NavigationState = state;
+
+//   // Drill down through nested navigators
+//   while (true) {
+//     const route = currentState.routes[currentState.index ?? 0] as any;
+//     if (!route.state) {
+//       return route;
+//     }
+//     currentState = route.state as NavigationState;
+//   }
+// }
+
 export default (props: { theme: ColorTheme }) => {
   const navigationRef = useNavigationContainerRef<ModalStackRoutes>();
   const isNavigationReadyRef = React.useRef(false);
   const initialURLWasConsumed = React.useRef(false);
+  // const { inspectedViewRef, setActiveRouteKey } = useBloomInspector();
 
   React.useEffect(() => {
     const handleDeepLinks = async ({ url }: { url: string | null }) => {
@@ -214,13 +267,24 @@ export default (props: { theme: ColorTheme }) => {
     };
   }, []);
 
+  // const handleStateChange = () => {
+  //   const state = navigationRef.current?.getRootState();
+  //   if (!state) return;
+
+  //   const activeRoute = getActiveRoute(state);
+  //   setActiveRouteKey(activeRoute.key);
+  // };
+
   return (
     <NavigationContainer
       theme={Themes[props.theme]}
       ref={navigationRef}
+      // onStateChange={handleStateChange}
       onReady={() => {
         isNavigationReadyRef.current = true;
+        // handleStateChange();
       }}>
+      {/* <View style={{ flex: 1 }} ref={inspectedViewRef}> */}
       <ModalStack.Navigator
         initialRouteName="RootStack"
         detachInactiveScreens={shouldDetachInactiveScreens}
@@ -267,6 +331,7 @@ export default (props: { theme: ColorTheme }) => {
         </ModalStack.Screen>
         <ModalStack.Screen name="QRCode" component={QRCodeScreen} />
       </ModalStack.Navigator>
+      {/* </View> */}
     </NavigationContainer>
   );
 };
@@ -274,5 +339,8 @@ export default (props: { theme: ColorTheme }) => {
 const styles = StyleSheet.create({
   icon: {
     marginBottom: Platform.OS === 'ios' ? -3 : 0,
+  },
+  screenRoot: {
+    flex: 1,
   },
 });

@@ -22,6 +22,11 @@
 - (nullable RCTReactNativeFactory *)mainAppFactory;
 
 /**
+ * Returns the React Native host used by the dev menu bridge.
+ */
+- (nullable id)mainReactHost;
+
+/**
  * Returns bool value whether the dev menu is visible.
  */
 - (BOOL)isVisible;

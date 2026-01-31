@@ -3,5 +3,10 @@ module.exports = function (api) {
   return {
     presets: ['babel-preset-expo'],
     plugins: ['react-native-worklets/plugin'],
+    env: {
+      development: {
+        plugins: ['@babel/plugin-transform-react-jsx-source', './babel/bloom-source-plugin'],
+      },
+    },
   };
 };

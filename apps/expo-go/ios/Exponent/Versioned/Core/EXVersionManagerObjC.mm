@@ -5,6 +5,8 @@
 #import "EXDisabledDevLoadingView.h"
 #import "EXDisabledDevMenu.h"
 #import "EXDisabledRedBox.h"
+#import <UIKit/UIKit.h>
+#import "EXDevMenuManager.h"
 #import "EXVersionManagerObjC.h"
 #import "EXStatusBarManager.h"
 #import "EXUnversioned.h"
@@ -29,7 +31,6 @@
 #import <React/RCTInspectorDevServerHelper.h>
 #import <React/CoreModulesPlugins.h>
 #import <React/RCTReloadCommand.h>
-
 #import <ExpoModulesCore/EXNativeModulesProxy.h>
 #import <ExpoModulesCore/EXModuleRegistryHolderReactModule.h>
 #import <ReactCommon/RCTTurboModuleManager.h>
@@ -52,6 +53,10 @@
 #import "EXScopedModuleRegistryDelegate.h"
 
 #import "Expo_Go-Swift.h"
+#import "EXKernel.h"
+#import "EXReactAppManager.h"
+#import "EXBloomInspectorManager.h"
+
 
 RCT_EXTERN NSDictionary<NSString *, NSDictionary *> *EXGetScopedModuleClasses(void);
 RCT_EXTERN void EXRegisterScopedModule(Class, ...);
@@ -160,6 +165,19 @@ RCT_EXTERN void EXRegisterScopedModule(Class, ...);
     };
   }
 
+ if (isDevModeEnabled) {
+    items[@"bloom-inspector"] = @{
+      @"label": @"Toggle Bloom Element Inspector (Native)",
+      @"isEnabled": @YES
+    };
+  } else {
+    items[@"bloom-inspector"] = @{
+      @"label": @"Bloom Inspector Element Unavailable",
+      @"isEnabled": @NO
+    };
+  }
+
+
   items[@"dev-remote-debug"] = @{
     @"label": @"Open JS Debugger",
     @"isEnabled": @YES
@@ -210,6 +228,9 @@ RCT_EXTERN void EXRegisterScopedModule(Class, ...);
     devSettings.isHotLoadingEnabled = !devSettings.isHotLoadingEnabled;
   } else if ([key isEqualToString:@"dev-inspector"]) {
     [devSettings toggleElementInspector];
+  } else if ([key isEqualToString:@"bloom-inspector"]) {
+    [[EXBloomInspectorOverlayManager sharedInstance] toggle];
+    [[EXDevMenuManager sharedInstance] closeWithoutAnimation];
   } else if ([key isEqualToString:@"dev-perf-monitor"]) {
     id perfMonitor = [self _moduleInstanceForHost:host named:@"PerfMonitor"];
     if (perfMonitor) {
@@ -255,6 +276,17 @@ RCT_EXTERN void EXRegisterScopedModule(Class, ...);
   RCTDevSettings *devSettings = [self devSettings:host];
   [devSettings toggleElementInspector];
 }
+
+- (void)toggleBloomElementInspectorForHost:(id)host
+{
+  // RCTDevSettings *devSettings = [self devSettings:host];
+  // devSettings.isElementInspectorShown = !devSettings.isElementInspectorShown;
+  [self toggleElementInspectorForHost:host];
+
+  // Or if you want DIFFERENT behavior than normal inspector:
+  // devSettings.isBloomInspectorShown = !devSettings.isBloomInspectorShown;
+}
+
 
 - (uint32_t)addWebSocketNotificationHandler:(void (^)(NSDictionary<NSString *, id> *))handler
                                     queue:(dispatch_queue_t)queue
@@ -313,6 +345,8 @@ RCT_EXTERN void EXRegisterScopedModule(Class, ...);
     [extraModules addObject:homeModule];
   }
 
+  [extraModules addObject:[self getModuleInstanceFromClass:[EXBloomInspector class]]];
+  [extraModules addObject:[self getModuleInstanceFromClass:[EXBloomInspectorOverlay class]]];
   [extraModules addObject:[self getModuleInstanceFromClass:[self getModuleClassFromName:"DevSettings"]]];
   id exceptionsManager = [self getModuleInstanceFromClass:RCTExceptionsManagerCls()];
   if (exceptionsManager) {
